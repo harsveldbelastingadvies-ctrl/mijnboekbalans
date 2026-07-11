@@ -12,7 +12,14 @@ import {
 
 type EntryType = "income" | "expense";
 type EntryStatus = "paid" | "open";
-type TabKey = "overview" | "entries" | "checks" | "reports" | "contacts" | "settings";
+type TabKey =
+  | "overview"
+  | "entries"
+  | "payroll"
+  | "checks"
+  | "reports"
+  | "contacts"
+  | "settings";
 type PeriodKey = "year" | "q1" | "q2" | "q3" | "q4";
 type WorkspaceState = "checking" | "setup" | "locked" | "unlocked";
 
@@ -35,7 +42,19 @@ type Contact = {
   email: string;
   address: string;
   kvk: string;
-  type: "customer" | "supplier";
+  type: "customer" | "supplier" | "entrepreneur";
+};
+
+type SalaryRecord = {
+  id: string;
+  employeeName: string;
+  period: string;
+  grossSalary: number;
+  wageTax: number;
+  netSalary: number;
+  employerHealthContribution: number;
+  status: EntryStatus;
+  paymentDate: string;
 };
 
 type Administration = {
@@ -48,6 +67,7 @@ type Administration = {
   iban: string;
   entries: Entry[];
   contacts: Contact[];
+  salaries?: SalaryRecord[];
 };
 
 type Summary = ReturnType<typeof calculateTotals>;
@@ -118,6 +138,19 @@ const starterData: Administration[] = [
     vatNumber: "NL812345678B01",
     fiscalYear: 2026,
     iban: "NL91 ABNA 0417 1643 00",
+    salaries: [
+      {
+        id: "salary-1",
+        employeeName: "Sanne de Vries",
+        period: "2026-07",
+        grossSalary: 4200,
+        wageTax: 1460,
+        netSalary: 2740,
+        employerHealthContribution: 290,
+        status: "open",
+        paymentDate: "2026-07-25",
+      },
+    ],
     contacts: [
       {
         id: "contact-1",
@@ -192,6 +225,17 @@ const emptyContact = {
   address: "",
   kvk: "",
   type: "customer" as Contact["type"],
+};
+
+const emptySalary = {
+  employeeName: "",
+  period: today.slice(0, 7),
+  grossSalary: "",
+  wageTax: "",
+  netSalary: "",
+  employerHealthContribution: "",
+  status: "open" as EntryStatus,
+  paymentDate: today,
 };
 
 function calculateTotals(entries: Entry[]) {
@@ -310,6 +354,51 @@ function buildProfitLossStatement(entries: Entry[]) {
     profitBeforeDepreciation,
     profitAfterDepreciation,
   };
+}
+
+function getAdminSalaries(admin: Administration) {
+  return admin.salaries ?? [];
+}
+
+function getSalaryYear(period: string) {
+  return Number(period.slice(0, 4));
+}
+
+function getSalaryMonthLabel(period: string) {
+  const [year, month] = period.split("-");
+  if (!year || !month) return period;
+  const date = new Date(Number(year), Number(month) - 1, 1);
+  return date.toLocaleDateString("nl-NL", { month: "long", year: "numeric" });
+}
+
+function filterSalariesByYear(salaries: SalaryRecord[], fiscalYear: number) {
+  return salaries.filter((salary) => getSalaryYear(salary.period) === fiscalYear);
+}
+
+function calculateSalaryTotals(salaries: SalaryRecord[]) {
+  return salaries.reduce(
+    (acc, salary) => {
+      acc.grossSalary += salary.grossSalary;
+      acc.wageTax += salary.wageTax;
+      acc.netSalary += salary.netSalary;
+      acc.employerHealthContribution += salary.employerHealthContribution;
+      if (salary.status === "open") acc.openCount += 1;
+      return acc;
+    },
+    {
+      grossSalary: 0,
+      wageTax: 0,
+      netSalary: 0,
+      employerHealthContribution: 0,
+      openCount: 0,
+    },
+  );
+}
+
+function contactTypeLabel(type: Contact["type"]) {
+  if (type === "customer") return "Klant";
+  if (type === "supplier") return "Leverancier";
+  return "Ondernemer";
 }
 
 function safeFileName(value: string) {
@@ -826,9 +915,87 @@ function buildContactsPdf(admin: Administration) {
         contact.email || "-",
         contact.address || "-",
         contact.kvk || "-",
-        contact.type === "customer" ? "Klant" : "Leverancier",
+        contactTypeLabel(contact.type),
       ]),
       emptyText: "Nog geen relaties vastgelegd.",
+    },
+  ]);
+}
+
+function buildPayslipPdf(admin: Administration, salary: SalaryRecord) {
+  return buildTablePdf(admin, "Loonstrook", getSalaryMonthLabel(salary.period), [
+    {
+      title: "Werknemer en periode",
+      headers: ["Onderdeel", "Gegeven"],
+      widths: [190, 321],
+      rows: [
+        ["Werknemer", salary.employeeName],
+        ["Periode", getSalaryMonthLabel(salary.period)],
+        ["Betaaldatum", salary.paymentDate || "-"],
+        ["Status", salary.status === "paid" ? "Betaald" : "Open"],
+      ],
+    },
+    {
+      title: "Berekening",
+      headers: ["Onderdeel", "Bedrag"],
+      widths: [340, 171],
+      rows: [
+        ["Brutoloon", money.format(salary.grossSalary)],
+        ["Loonheffing", money.format(salary.wageTax)],
+        ["Netto uit te betalen", money.format(salary.netSalary)],
+        ["Werkgeversbijdrage Zvw", money.format(salary.employerHealthContribution)],
+      ],
+    },
+  ]);
+}
+
+function buildAnnualIncomeStatementPdf(
+  admin: Administration,
+  employeeName: string,
+  salaries: SalaryRecord[],
+) {
+  const totals = calculateSalaryTotals(salaries);
+  return buildTablePdf(admin, "Jaaropgave", String(admin.fiscalYear), [
+    {
+      title: "Werknemer",
+      headers: ["Onderdeel", "Gegeven"],
+      widths: [190, 321],
+      rows: [
+        ["Werknemer", employeeName],
+        ["Werkgever", admin.name],
+        ["Boekjaar", admin.fiscalYear],
+        ["Aantal loontijdvakken", salaries.length],
+      ],
+    },
+    {
+      title: "Jaarbedragen",
+      headers: ["Onderdeel", "Bedrag"],
+      widths: [340, 171],
+      rows: [
+        ["Fiscaal loon / brutoloon", money.format(totals.grossSalary)],
+        ["Ingehouden loonheffing", money.format(totals.wageTax)],
+        ["Netto uitbetaald", money.format(totals.netSalary)],
+        ["Werkgeversbijdrage Zvw", money.format(totals.employerHealthContribution)],
+      ],
+    },
+  ]);
+}
+
+function buildPayrollOverviewPdf(admin: Administration, salaries: SalaryRecord[]) {
+  return buildTablePdf(admin, "Salarisoverzicht", String(admin.fiscalYear), [
+    {
+      title: "Salarisregels",
+      headers: ["Periode", "Werknemer", "Bruto", "Loonheffing", "Netto", "Status"],
+      widths: [78, 145, 74, 82, 74, 58],
+      rows: salaries.map((salary) => [
+        getSalaryMonthLabel(salary.period),
+        salary.employeeName,
+        money.format(salary.grossSalary),
+        money.format(salary.wageTax),
+        money.format(salary.netSalary),
+        salary.status === "paid" ? "Betaald" : "Open",
+      ]),
+      emptyText: "Nog geen salarisregels voor dit boekjaar.",
     },
   ]);
 }
@@ -843,6 +1010,10 @@ export default function Home() {
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [contactForm, setContactForm] = useState(emptyContact);
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
+  const [salaryForm, setSalaryForm] = useState(emptySalary);
+  const [editingSalaryId, setEditingSalaryId] = useState<string | null>(null);
+  const [kvkQuery, setKvkQuery] = useState("");
+  const [kvkStatus, setKvkStatus] = useState("");
   const [period, setPeriod] = useState<PeriodKey>("year");
   const [workspaceState, setWorkspaceState] = useState<WorkspaceState>("checking");
   const [workspaceProfile, setWorkspaceProfile] = useState<WorkspaceProfile | null>(null);
@@ -930,6 +1101,19 @@ export default function Home() {
   }, [administrations, hydrated, workspacePin, workspaceState]);
 
   const active = administrations.find((admin) => admin.id === activeId) ?? administrations[0];
+  const activeSalaries = getAdminSalaries(active);
+  const fiscalYearSalaries = useMemo(
+    () => filterSalariesByYear(activeSalaries, active.fiscalYear),
+    [activeSalaries, active.fiscalYear],
+  );
+  const salaryTotals = useMemo(
+    () => calculateSalaryTotals(fiscalYearSalaries),
+    [fiscalYearSalaries],
+  );
+  const salaryEmployees = useMemo(
+    () => Array.from(new Set(fiscalYearSalaries.map((salary) => salary.employeeName))).sort(),
+    [fiscalYearSalaries],
+  );
   const filteredEntries = useMemo(
     () => filterEntriesByPeriod(active.entries, active.fiscalYear, period),
     [active.entries, active.fiscalYear, period],
@@ -951,7 +1135,9 @@ export default function Home() {
   const latestEntries = filteredEntries.slice(0, 4);
   const enteredAmount = Number(entryForm.amount.toString().replace(",", "."));
   const relationSuggestions = active.contacts.filter((contact) =>
-    entryForm.type === "income" ? contact.type === "customer" : contact.type === "supplier",
+    entryForm.type === "income"
+      ? contact.type === "customer" || contact.type === "entrepreneur"
+      : contact.type === "supplier" || contact.type === "entrepreneur",
   );
   const relationListId = `relations-${entryForm.type}`;
   const showDepreciation = entryForm.type === "expense" && entryForm.category === "Investeringen";
@@ -966,6 +1152,7 @@ export default function Home() {
     ["IBAN", active.iban],
   ].filter(([, value]) => !String(value).trim());
   const openEntries = filteredEntries.filter((entry) => entry.status === "open");
+  const openSalaries = fiscalYearSalaries.filter((salary) => salary.status === "open");
   const depreciationCandidates = filteredEntries.filter(
     (entry) =>
       entry.type === "expense" &&
@@ -982,7 +1169,8 @@ export default function Home() {
     openEntries.length +
     depreciationCandidates.length +
     unknownRelationEntries.length +
-    zeroVatEntries.length;
+    zeroVatEntries.length +
+    salaryTotals.openCount;
 
   const updateActive = (next: Administration) => {
     setAdministrations((items) =>
@@ -1085,6 +1273,108 @@ export default function Home() {
     setEditingContactId(null);
   };
 
+  const searchKvk = async () => {
+    const query = kvkQuery.trim();
+    if (!query) return;
+    setKvkStatus("Zoeken bij KvK...");
+    try {
+      const response = await fetch(`/api/kvk/search?q=${encodeURIComponent(query)}`);
+      const data = (await response.json()) as {
+        results?: Array<{ name: string; kvk: string; address: string }>;
+        error?: string;
+      };
+      if (!response.ok) throw new Error(data.error ?? "KvK zoeken mislukt.");
+      const first = data.results?.[0];
+      if (!first) {
+        setKvkStatus("Geen KvK-resultaat gevonden.");
+        return;
+      }
+      setContactForm({
+        ...contactForm,
+        name: first.name || contactForm.name,
+        kvk: first.kvk || contactForm.kvk,
+        address: first.address || contactForm.address,
+      });
+      setKvkStatus("Eerste KvK-resultaat ingevuld. Controleer de gegevens.");
+    } catch (error) {
+      setKvkStatus(
+        error instanceof Error
+          ? error.message
+          : "KvK zoeken is nog niet beschikbaar.",
+      );
+    }
+  };
+
+  const saveSalary = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const grossSalary = Number(salaryForm.grossSalary.toString().replace(",", "."));
+    const wageTax = Number(salaryForm.wageTax.toString().replace(",", "."));
+    const netSalary = Number(salaryForm.netSalary.toString().replace(",", "."));
+    const employerHealthContribution = Number(
+      salaryForm.employerHealthContribution.toString().replace(",", "."),
+    );
+    if (
+      !salaryForm.employeeName.trim() ||
+      !salaryForm.period ||
+      !Number.isFinite(grossSalary) ||
+      !Number.isFinite(wageTax) ||
+      !Number.isFinite(netSalary)
+    ) {
+      return;
+    }
+
+    const salary: SalaryRecord = {
+      id: editingSalaryId ?? uid(),
+      employeeName: salaryForm.employeeName.trim(),
+      period: salaryForm.period,
+      grossSalary,
+      wageTax,
+      netSalary,
+      employerHealthContribution: Number.isFinite(employerHealthContribution)
+        ? employerHealthContribution
+        : 0,
+      status: salaryForm.status,
+      paymentDate: salaryForm.paymentDate,
+    };
+
+    updateActive({
+      ...active,
+      salaries: editingSalaryId
+        ? activeSalaries.map((item) => (item.id === editingSalaryId ? salary : item))
+        : [salary, ...activeSalaries],
+    });
+    setSalaryForm({ ...emptySalary, period: salaryForm.period });
+    setEditingSalaryId(null);
+  };
+
+  const editSalary = (salary: SalaryRecord) => {
+    setSalaryForm({
+      employeeName: salary.employeeName,
+      period: salary.period,
+      grossSalary: String(salary.grossSalary).replace(".", ","),
+      wageTax: String(salary.wageTax).replace(".", ","),
+      netSalary: String(salary.netSalary).replace(".", ","),
+      employerHealthContribution: String(salary.employerHealthContribution).replace(".", ","),
+      status: salary.status,
+      paymentDate: salary.paymentDate,
+    });
+    setEditingSalaryId(salary.id);
+    setTab("payroll");
+  };
+
+  const cancelEditSalary = () => {
+    setSalaryForm(emptySalary);
+    setEditingSalaryId(null);
+  };
+
+  const removeSalary = (salaryId: string) => {
+    updateActive({
+      ...active,
+      salaries: activeSalaries.filter((salary) => salary.id !== salaryId),
+    });
+    if (editingSalaryId === salaryId) cancelEditSalary();
+  };
+
   const editContact = (contact: Contact) => {
     setContactForm({
       name: contact.name,
@@ -1121,6 +1411,15 @@ export default function Home() {
       setEntryForm(emptyEntry);
       setEditingEntryId(null);
     }
+  };
+
+  const markSalaryPaid = (salaryId: string) => {
+    updateActive({
+      ...active,
+      salaries: activeSalaries.map((salary) =>
+        salary.id === salaryId ? { ...salary, status: "paid" } : salary,
+      ),
+    });
   };
 
   const editEntry = (entry: Entry) => {
@@ -1228,6 +1527,30 @@ export default function Home() {
 
   const downloadContacts = () => {
     downloadBlob(`${administrationFileBase}-relaties.pdf`, buildContactsPdf(active));
+  };
+
+  const downloadPayrollOverview = () => {
+    downloadBlob(
+      `${administrationFileBase}-salarisoverzicht.pdf`,
+      buildPayrollOverviewPdf(active, fiscalYearSalaries),
+    );
+  };
+
+  const downloadPayslip = (salary: SalaryRecord) => {
+    downloadBlob(
+      `${administrationFileBase}-${salary.period}-loonstrook-${safeFileName(salary.employeeName)}.pdf`,
+      buildPayslipPdf(active, salary),
+    );
+  };
+
+  const downloadAnnualIncomeStatement = (employeeName: string) => {
+    const employeeSalaries = fiscalYearSalaries.filter(
+      (salary) => salary.employeeName === employeeName,
+    );
+    downloadBlob(
+      `${administrationFileBase}-jaaropgave-${safeFileName(employeeName)}.pdf`,
+      buildAnnualIncomeStatementPdf(active, employeeName, employeeSalaries),
+    );
   };
 
   const downloadBackup = () => {
@@ -1338,7 +1661,7 @@ export default function Home() {
               >
                 <span className="block text-sm font-semibold">{admin.name}</span>
                 <span className="mt-1 block text-xs text-[var(--muted)]">
-                  {admin.entries.length} boekingen, boekjaar {admin.fiscalYear}
+                  {admin.entries.length} boekingen, {getAdminSalaries(admin).length} salarisregels
                 </span>
               </button>
             ))}
@@ -1395,6 +1718,7 @@ export default function Home() {
             {[
               ["overview", "Dashboard"],
               ["entries", "Boekingen"],
+              ["payroll", "Salarissen"],
               ["checks", checkCount ? `Controle (${checkCount})` : "Controle"],
               ["reports", "Downloads"],
               ["contacts", "Relaties"],
@@ -1476,8 +1800,8 @@ export default function Home() {
           )}
 
           {tab === "entries" && (
-            <div className="mt-6 grid gap-5 xl:grid-cols-[0.85fr_1.15fr]">
-              <section className="panel">
+            <div className="mt-6 grid gap-5">
+              <section className="panel entry-workbench">
                 <div className="section-title">
                   <div>
                     <p className="eyebrow">{editingEntryId ? "Correctie" : "Nieuwe regel"}</p>
@@ -1490,6 +1814,39 @@ export default function Home() {
                   ) : null}
                 </div>
                 <form className="mt-4 grid gap-3" onSubmit={addEntry}>
+                  <div className="segmented-control">
+                    <button
+                      className={entryForm.type === "income" ? "is-active" : ""}
+                      onClick={() =>
+                        setEntryForm({
+                          ...entryForm,
+                          type: "income",
+                          category: entryCategories.income[0],
+                          relation: "",
+                          depreciationYears: "none",
+                        })
+                      }
+                      type="button"
+                    >
+                      Inkomsten
+                    </button>
+                    <button
+                      className={entryForm.type === "expense" ? "is-active" : ""}
+                      onClick={() =>
+                        setEntryForm({
+                          ...entryForm,
+                          type: "expense",
+                          category: entryCategories.expense[0],
+                          relation: "",
+                          depreciationYears: "none",
+                        })
+                      }
+                      type="button"
+                    >
+                      Uitgaven
+                    </button>
+                  </div>
+                  <div className="entry-form-grid">
                   <Field label="Datum">
                     <input className="input" type="date" value={entryForm.date} onChange={(event) => setEntryForm({ ...entryForm, date: event.target.value })} />
                   </Field>
@@ -1513,33 +1870,6 @@ export default function Home() {
                       ))}
                     </datalist>
                   </Field>
-                  <div className="grid grid-cols-2 gap-3">
-                    <Field label="Soort">
-                      <select
-                        className="input"
-                        value={entryForm.type}
-                        onChange={(event) => {
-                          const type = event.target.value as EntryType;
-                          setEntryForm({
-                            ...entryForm,
-                            type,
-                            category: entryCategories[type][0],
-                            relation: "",
-                            depreciationYears: "none",
-                          });
-                        }}
-                      >
-                        <option value="income">Inkomsten</option>
-                        <option value="expense">Uitgaven</option>
-                      </select>
-                    </Field>
-                    <Field label="Status">
-                      <select className="input" value={entryForm.status} onChange={(event) => setEntryForm({ ...entryForm, status: event.target.value as EntryStatus })}>
-                        <option value="paid">Betaald</option>
-                        <option value="open">Open</option>
-                      </select>
-                    </Field>
-                  </div>
                   <Field label="Categorie">
                     <select
                       className="input"
@@ -1560,6 +1890,23 @@ export default function Home() {
                       ))}
                     </select>
                   </Field>
+                  <Field label="Bedrag excl. btw">
+                    <input className="input" inputMode="decimal" value={entryForm.amount} onChange={(event) => setEntryForm({ ...entryForm, amount: event.target.value })} />
+                  </Field>
+                  <Field label="Btw">
+                    <select className="input" value={entryForm.vatRate} onChange={(event) => setEntryForm({ ...entryForm, vatRate: event.target.value })}>
+                      <option value="21">21%</option>
+                      <option value="9">9%</option>
+                      <option value="0">0%</option>
+                    </select>
+                  </Field>
+                  <Field label="Status">
+                    <select className="input" value={entryForm.status} onChange={(event) => setEntryForm({ ...entryForm, status: event.target.value as EntryStatus })}>
+                      <option value="paid">Betaald</option>
+                      <option value="open">Open</option>
+                    </select>
+                  </Field>
+                  </div>
                   {showDepreciation && (
                     <Field label="Afschrijving">
                       <select
@@ -1586,19 +1933,7 @@ export default function Home() {
                       </span>
                     </Field>
                   )}
-                  <div className="grid grid-cols-2 gap-3">
-                    <Field label="Bedrag excl. btw">
-                      <input className="input" inputMode="decimal" value={entryForm.amount} onChange={(event) => setEntryForm({ ...entryForm, amount: event.target.value })} />
-                    </Field>
-                    <Field label="Btw">
-                      <select className="input" value={entryForm.vatRate} onChange={(event) => setEntryForm({ ...entryForm, vatRate: event.target.value })}>
-                        <option value="21">21%</option>
-                        <option value="9">9%</option>
-                        <option value="0">0%</option>
-                      </select>
-                    </Field>
-                  </div>
-                  <button className="primary-button mt-2 justify-center py-3">
+                  <button className="primary-button mt-2 justify-center py-3 md:w-fit">
                     {editingEntryId ? "Wijziging opslaan" : "Boeking opslaan"}
                   </button>
                 </form>
@@ -1614,12 +1949,188 @@ export default function Home() {
             </div>
           )}
 
+          {tab === "payroll" && (
+            <div className="mt-6 grid gap-5">
+              <div className="grid gap-3 md:grid-cols-4">
+                <Metric label="Brutoloon" value={money.format(salaryTotals.grossSalary)} accent="teal" />
+                <Metric label="Loonheffing" value={money.format(salaryTotals.wageTax)} accent="coral" />
+                <Metric label="Netto loon" value={money.format(salaryTotals.netSalary)} accent="blue" />
+                <Metric label="Open salarissen" value={String(salaryTotals.openCount)} accent="yellow" />
+              </div>
+
+              <section className="panel">
+                <div className="section-title">
+                  <div>
+                    <p className="eyebrow">{editingSalaryId ? "Correctie" : "Nieuwe salarisregel"}</p>
+                    <h3>{editingSalaryId ? "Salaris bewerken" : "DGA-salaris registreren"}</h3>
+                  </div>
+                  {editingSalaryId ? (
+                    <button className="ghost-button" onClick={cancelEditSalary} type="button">
+                      Annuleer
+                    </button>
+                  ) : null}
+                </div>
+                <form className="mt-4 grid gap-3" onSubmit={saveSalary}>
+                  <div className="salary-form-grid">
+                    <Field label="DGA / werknemer">
+                      <input
+                        className="input"
+                        value={salaryForm.employeeName}
+                        onChange={(event) => setSalaryForm({ ...salaryForm, employeeName: event.target.value })}
+                      />
+                    </Field>
+                    <Field label="Periode">
+                      <input
+                        className="input"
+                        type="month"
+                        value={salaryForm.period}
+                        onChange={(event) => setSalaryForm({ ...salaryForm, period: event.target.value })}
+                      />
+                    </Field>
+                    <Field label="Brutoloon">
+                      <input
+                        className="input"
+                        inputMode="decimal"
+                        value={salaryForm.grossSalary}
+                        onChange={(event) => setSalaryForm({ ...salaryForm, grossSalary: event.target.value })}
+                      />
+                    </Field>
+                    <Field label="Loonheffing">
+                      <input
+                        className="input"
+                        inputMode="decimal"
+                        value={salaryForm.wageTax}
+                        onChange={(event) => setSalaryForm({ ...salaryForm, wageTax: event.target.value })}
+                      />
+                    </Field>
+                    <Field label="Netto loon">
+                      <input
+                        className="input"
+                        inputMode="decimal"
+                        value={salaryForm.netSalary}
+                        onChange={(event) => setSalaryForm({ ...salaryForm, netSalary: event.target.value })}
+                      />
+                    </Field>
+                    <Field label="Werkgeversbijdrage Zvw">
+                      <input
+                        className="input"
+                        inputMode="decimal"
+                        value={salaryForm.employerHealthContribution}
+                        onChange={(event) =>
+                          setSalaryForm({ ...salaryForm, employerHealthContribution: event.target.value })
+                        }
+                      />
+                    </Field>
+                    <Field label="Betaaldatum">
+                      <input
+                        className="input"
+                        type="date"
+                        value={salaryForm.paymentDate}
+                        onChange={(event) => setSalaryForm({ ...salaryForm, paymentDate: event.target.value })}
+                      />
+                    </Field>
+                    <Field label="Status">
+                      <select
+                        className="input"
+                        value={salaryForm.status}
+                        onChange={(event) => setSalaryForm({ ...salaryForm, status: event.target.value as EntryStatus })}
+                      >
+                        <option value="paid">Betaald</option>
+                        <option value="open">Open</option>
+                      </select>
+                    </Field>
+                  </div>
+                  <button className="primary-button mt-2 justify-center py-3 md:w-fit">
+                    {editingSalaryId ? "Salaris opslaan" : "Salaris toevoegen"}
+                  </button>
+                </form>
+              </section>
+
+              <section className="panel">
+                <div className="section-title">
+                  <div>
+                    <p className="eyebrow">{fiscalYearSalaries.length} salarisregels · {active.fiscalYear}</p>
+                    <h3>Loonstroken en jaaropgaven</h3>
+                  </div>
+                </div>
+                <div className="mt-4 overflow-x-auto">
+                  <table className="w-full min-w-[900px] border-collapse text-left text-sm">
+                    <thead>
+                      <tr className="border-b border-[var(--line)] text-xs font-bold uppercase text-[var(--muted)]">
+                        <th className="py-3 pr-3">Periode</th>
+                        <th className="py-3 pr-3">DGA / werknemer</th>
+                        <th className="py-3 pr-3">Bruto</th>
+                        <th className="py-3 pr-3">Loonheffing</th>
+                        <th className="py-3 pr-3">Netto</th>
+                        <th className="py-3 pr-3">Status</th>
+                        <th className="py-3 pr-3">Actie</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {fiscalYearSalaries.map((salary) => (
+                        <tr className="border-b border-[var(--line)] last:border-b-0" key={salary.id}>
+                          <td className="py-3 pr-3">{getSalaryMonthLabel(salary.period)}</td>
+                          <td className="py-3 pr-3">
+                            <strong>{salary.employeeName}</strong>
+                            <span className="mt-1 block text-xs text-[var(--muted)]">
+                              Betaaldatum {salary.paymentDate || "-"}
+                            </span>
+                          </td>
+                          <td className="py-3 pr-3">{money.format(salary.grossSalary)}</td>
+                          <td className="py-3 pr-3">{money.format(salary.wageTax)}</td>
+                          <td className="py-3 pr-3">{money.format(salary.netSalary)}</td>
+                          <td className="py-3 pr-3">{salary.status === "paid" ? "Betaald" : "Open"}</td>
+                          <td className="py-3 pr-3">
+                            <div className="flex flex-wrap gap-2">
+                              <button className="ghost-button" onClick={() => downloadPayslip(salary)}>
+                                Loonstrook
+                              </button>
+                              {salary.status === "open" ? (
+                                <button className="ghost-button" onClick={() => markSalaryPaid(salary.id)}>
+                                  Betaald
+                                </button>
+                              ) : null}
+                              <button className="ghost-button" onClick={() => editSalary(salary)}>
+                                Bewerk
+                              </button>
+                              <button className="ghost-button" onClick={() => removeSalary(salary.id)}>
+                                Verwijder
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {!fiscalYearSalaries.length && (
+                    <p className="py-6 text-sm text-[var(--muted)]">
+                      Nog geen salarissen voor dit boekjaar.
+                    </p>
+                  )}
+                </div>
+                {salaryEmployees.length ? (
+                  <div className="mt-5 grid gap-2 border-t border-[var(--line)] pt-4 md:grid-cols-2 xl:grid-cols-3">
+                    {salaryEmployees.map((employeeName) => (
+                      <button
+                        className="secondary-button justify-center"
+                        key={employeeName}
+                        onClick={() => downloadAnnualIncomeStatement(employeeName)}
+                      >
+                        Jaaropgave {employeeName}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </section>
+            </div>
+          )}
+
           {tab === "checks" && (
             <div className="mt-6 grid gap-5 xl:grid-cols-4">
               <Metric label="Aandachtspunten" value={String(checkCount)} accent={checkCount ? "coral" : "teal"} />
               <Metric label="Open posten" value={String(openEntries.length)} accent="yellow" />
               <Metric label="Afschrijving check" value={String(depreciationCandidates.length)} accent="blue" />
-              <Metric label="Gegevens missen" value={String(missingSettings.length)} accent="coral" />
+              <Metric label="Open salarissen" value={String(openSalaries.length)} accent="yellow" />
 
               <section className="panel xl:col-span-2">
                 <div className="section-title">
@@ -1639,6 +2150,31 @@ export default function Home() {
                       meta={`${entry.date} · ${entry.relation} · ${money.format(entry.amount * (1 + entry.vatRate / 100))} incl. btw`}
                     >
                       <button className="soft-button" onClick={() => markEntryPaid(entry.id)}>
+                        Markeer betaald
+                      </button>
+                    </CheckRow>
+                  ))}
+                </CheckRows>
+              </section>
+
+              <section className="panel xl:col-span-2">
+                <div className="section-title">
+                  <div>
+                    <p className="eyebrow">Salarissen · {active.fiscalYear}</p>
+                    <h3>Open salarisbetalingen</h3>
+                  </div>
+                  <button className="secondary-button" onClick={() => setTab("payroll")}>
+                    Naar salarissen
+                  </button>
+                </div>
+                <CheckRows emptyText="Geen open salarisbetalingen.">
+                  {openSalaries.map((salary) => (
+                    <CheckRow
+                      key={salary.id}
+                      title={`${salary.employeeName} · ${getSalaryMonthLabel(salary.period)}`}
+                      meta={`${money.format(salary.netSalary)} netto · betaaldatum ${salary.paymentDate || "-"}`}
+                    >
+                      <button className="soft-button" onClick={() => markSalaryPaid(salary.id)}>
                         Markeer betaald
                       </button>
                     </CheckRow>
@@ -1747,6 +2283,12 @@ export default function Home() {
                 button="Download PDF"
                 onClick={downloadContacts}
               />
+              <DownloadCard
+                title="Salarisoverzicht"
+                text="Alle salarisregels van het boekjaar met bruto, loonheffing en netto loon."
+                button="Download PDF"
+                onClick={downloadPayrollOverview}
+              />
               <ProfitLossPanel statement={profitLossStatement} periodLabel={periodLabel} />
               <section className="panel xl:col-span-2">
                 <div className="section-title">
@@ -1811,6 +2353,24 @@ export default function Home() {
                   <Field label="Naam">
                     <input className="input" value={contactForm.name} onChange={(event) => setContactForm({ ...contactForm, name: event.target.value })} />
                   </Field>
+                  <div className="kvk-search-box">
+                    <Field label="Zoeken bij KvK">
+                      <div className="flex gap-2">
+                        <input
+                          className="input min-w-0 flex-1"
+                          onChange={(event) => setKvkQuery(event.target.value)}
+                          placeholder="Bedrijfsnaam of KvK-nummer"
+                          value={kvkQuery}
+                        />
+                        <button className="secondary-button" onClick={searchKvk} type="button">
+                          Zoek
+                        </button>
+                      </div>
+                    </Field>
+                    <p className="mt-2 text-xs font-medium text-[var(--muted)]">
+                      {kvkStatus || "Met een KvK API-sleutel kan BoekBalans relaties automatisch aanvullen."}
+                    </p>
+                  </div>
                   <Field label="E-mail">
                     <input className="input" type="email" value={contactForm.email} onChange={(event) => setContactForm({ ...contactForm, email: event.target.value })} />
                   </Field>
@@ -1824,6 +2384,7 @@ export default function Home() {
                     <select className="input" value={contactForm.type} onChange={(event) => setContactForm({ ...contactForm, type: event.target.value as Contact["type"] })}>
                       <option value="customer">Klant</option>
                       <option value="supplier">Leverancier</option>
+                      <option value="entrepreneur">Ondernemer</option>
                     </select>
                   </Field>
                   <div className="grid gap-2 sm:grid-cols-2">
@@ -1859,7 +2420,7 @@ export default function Home() {
                           {contact.kvk ? ` · KvK ${contact.kvk}` : " · Geen KvK"}
                         </span>
                       </div>
-                      <span className="type-pill">{contact.type === "customer" ? "Klant" : "Leverancier"}</span>
+                      <span className="type-pill">{contactTypeLabel(contact.type)}</span>
                       <div className="flex flex-wrap gap-2">
                         <button className="ghost-button" onClick={() => editContact(contact)}>
                           Bewerk

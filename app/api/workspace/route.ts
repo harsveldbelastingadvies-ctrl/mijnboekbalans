@@ -23,7 +23,19 @@ type Contact = {
   email: string;
   address?: string;
   kvk?: string;
-  type: "customer" | "supplier";
+  type: "customer" | "supplier" | "entrepreneur";
+};
+
+type SalaryRecord = {
+  id: string;
+  employeeName: string;
+  period: string;
+  grossSalary: number;
+  wageTax: number;
+  netSalary: number;
+  employerHealthContribution: number;
+  status: "paid" | "open";
+  paymentDate: string;
 };
 
 type D1Statement<T = unknown> = {
@@ -46,6 +58,7 @@ type Administration = {
   iban: string;
   entries: Entry[];
   contacts: Contact[];
+  salaries?: SalaryRecord[];
 };
 
 type WorkspaceStore = {
