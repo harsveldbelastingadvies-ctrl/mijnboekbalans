@@ -311,6 +311,36 @@ select:focus-visible {
   padding: 0.85rem;
 }
 
+.vat-tool-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.toggle-line {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  padding: 0.85rem;
+  font-size: 0.92rem;
+  font-weight: 750;
+}
+
+.toggle-line input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--teal);
+}
+
+.vat-result-card {
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 8px;
+  background: #fbfdfb;
+  padding: 1rem;
+}
+
 .section-title {
   display: flex;
   flex-wrap: wrap;
@@ -553,6 +583,11 @@ select:focus-visible {
 
   .payroll-employee-grid {
     grid-template-columns: minmax(14rem, 1.2fr) minmax(9rem, 0.8fr) minmax(8rem, 0.65fr) minmax(7rem, 0.55fr) minmax(7rem, 0.55fr) minmax(16rem, 1.5fr);
+  }
+
+  .vat-tool-grid {
+    grid-template-columns: minmax(13rem, 1fr) repeat(3, minmax(9rem, 0.7fr)) minmax(12rem, 0.8fr);
+    align-items: end;
   }
 }
 

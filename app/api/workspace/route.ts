@@ -51,6 +51,13 @@ type PayrollEmployee = {
   address: string;
 };
 
+type VatDeductionSettings = {
+  enabled: boolean;
+  taxableTurnover: number;
+  exemptTurnover: number;
+  manualPercent?: number;
+};
+
 type D1Statement<T = unknown> = {
   bind: (...values: unknown[]) => D1Statement<T>;
   first: <Row = T>() => Promise<Row | null>;
@@ -74,6 +81,7 @@ type Administration = {
   contacts: Contact[];
   payrollEmployees?: PayrollEmployee[];
   salaries?: SalaryRecord[];
+  vatDeduction?: VatDeductionSettings;
 };
 
 type WorkspaceStore = {

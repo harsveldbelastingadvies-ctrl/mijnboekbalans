@@ -70,6 +70,13 @@ type PayrollEmployee = {
   address: string;
 };
 
+type VatDeductionSettings = {
+  enabled: boolean;
+  taxableTurnover: number;
+  exemptTurnover: number;
+  manualPercent?: number;
+};
+
 type Administration = {
   id: string;
   name: string;
@@ -83,6 +90,7 @@ type Administration = {
   contacts: Contact[];
   payrollEmployees?: PayrollEmployee[];
   salaries?: SalaryRecord[];
+  vatDeduction?: VatDeductionSettings;
 };
 
 type Summary = ReturnType<typeof calculateTotals>;
@@ -275,11 +283,44 @@ const emptyPayrollEmployee = {
   address: "",
 };
 
-function calculateTotals(entries: Entry[]) {
+const emptyVatDeduction: VatDeductionSettings = {
+  enabled: false,
+  taxableTurnover: 0,
+  exemptTurnover: 0,
+};
+
+function clampPercent(value: number) {
+  if (!Number.isFinite(value)) return 100;
+  return Math.min(100, Math.max(0, value));
+}
+
+function getVatDeductionSettings(admin: Administration) {
+  return admin.vatDeduction ?? emptyVatDeduction;
+}
+
+function calculateVatDeductionPercent(settings: VatDeductionSettings) {
+  if (!settings.enabled) return 100;
+  if (typeof settings.manualPercent === "number") {
+    return clampPercent(settings.manualPercent);
+  }
+
+  const taxable = Math.max(0, settings.taxableTurnover);
+  const exempt = Math.max(0, settings.exemptTurnover);
+  const total = taxable + exempt;
+  if (!total) return 100;
+  return clampPercent((taxable / total) * 100);
+}
+
+function calculateTotals(entries: Entry[], vatDeductionPercent = 100) {
+  const inputVatDeductionFactor = clampPercent(vatDeductionPercent) / 100;
   return entries.reduce(
     (acc, entry) => {
       const vat = entry.amount * (entry.vatRate / 100);
       const total = entry.amount + vat;
+      const deductibleInputVat =
+        entry.type === "expense" ? vat * inputVatDeductionFactor : 0;
+      const nonDeductibleVat =
+        entry.type === "expense" ? vat - deductibleInputVat : 0;
       const annualDepreciation =
         entry.type === "expense" && entry.depreciationYears
           ? entry.amount / entry.depreciationYears
@@ -290,8 +331,11 @@ function calculateTotals(entries: Entry[]) {
         acc.vatToPay += vat;
         acc.incomeCount += 1;
       } else {
-        acc.costs += entry.amount;
-        acc.vatToClaim += vat;
+        acc.costs += entry.amount + nonDeductibleVat;
+        acc.expenseAmountExVat += entry.amount;
+        acc.inputVatTotal += vat;
+        acc.vatToClaim += deductibleInputVat;
+        acc.nonDeductibleVat += nonDeductibleVat;
         acc.expenseCount += 1;
         acc.annualDepreciation += annualDepreciation;
         if (entry.depreciationYears) acc.depreciationCount += 1;
@@ -307,8 +351,11 @@ function calculateTotals(entries: Entry[]) {
     {
       revenue: 0,
       costs: 0,
+      expenseAmountExVat: 0,
       vatToPay: 0,
       vatToClaim: 0,
+      inputVatTotal: 0,
+      nonDeductibleVat: 0,
       open: 0,
       incomeCount: 0,
       expenseCount: 0,
@@ -342,14 +389,14 @@ function filterEntriesByPeriod(entries: Entry[], fiscalYear: number, period: Per
   });
 }
 
-function getQuarterSummaries(entries: Entry[], fiscalYear: number) {
+function getQuarterSummaries(entries: Entry[], fiscalYear: number, vatDeductionPercent = 100) {
   return ([1, 2, 3, 4] as const).map((quarter) => {
     const period = `q${quarter}` as PeriodKey;
     const periodEntries = filterEntriesByPeriod(entries, fiscalYear, period);
     return {
       quarter,
       entries: periodEntries,
-      summary: calculateTotals(periodEntries),
+      summary: calculateTotals(periodEntries, vatDeductionPercent),
     };
   });
 }
@@ -370,23 +417,30 @@ function groupEntriesByCategory(
     .sort((a, b) => b.amount - a.amount);
 }
 
-function buildProfitLossStatement(entries: Entry[]) {
-  const summary = calculateTotals(entries);
+function buildProfitLossStatement(entries: Entry[], vatDeductionPercent = 100) {
+  const summary = calculateTotals(entries, vatDeductionPercent);
   const revenueLines = groupEntriesByCategory(entries, "income");
   const expenseLines = groupEntriesByCategory(
     entries,
     "expense",
     (entry) => !entry.depreciationYears,
   );
-  const expenseTotal = expenseLines.reduce((total, line) => total + line.amount, 0);
+  const nonDeductibleVatLine =
+    summary.nonDeductibleVat > 0
+      ? [{ label: "Niet-aftrekbare btw", amount: summary.nonDeductibleVat }]
+      : [];
+  const expenseTotal =
+    expenseLines.reduce((total, line) => total + line.amount, 0) +
+    summary.nonDeductibleVat;
   const profitBeforeDepreciation = summary.revenue - expenseTotal;
   const profitAfterDepreciation = profitBeforeDepreciation - summary.annualDepreciation;
 
   return {
     revenueLines,
-    expenseLines,
+    expenseLines: [...expenseLines, ...nonDeductibleVatLine],
     revenueTotal: summary.revenue,
     expenseTotal,
+    nonDeductibleVat: summary.nonDeductibleVat,
     depreciation: summary.annualDepreciation,
     profitBeforeDepreciation,
     profitAfterDepreciation,
@@ -663,9 +717,9 @@ function buildPdfReport(
   addCard(306, 568, 119, "Resultaat", money.format(profit), profit >= 0 ? colors.blue : colors.coral);
   addCard(438, 568, 115, "Open posten", money.format(summary.open), colors.yellow);
   addCard(42, 494, 119, "Ontvangen btw", money.format(summary.vatToPay), colors.teal);
-  addCard(174, 494, 119, "Betaalde btw", money.format(summary.vatToClaim), colors.blue);
+  addCard(174, 494, 119, "Aftrekbare btw", money.format(summary.vatToClaim), colors.blue);
   addCard(306, 494, 119, vatBalance >= 0 ? "Btw te betalen" : "Btw terug", money.format(Math.abs(vatBalance)), vatBalance >= 0 ? colors.coral : colors.blue);
-  addCard(438, 494, 115, "Afschrijving p.j.", money.format(summary.annualDepreciation), colors.yellow);
+  addCard(438, 494, 115, "Niet aftrekbaar", money.format(summary.nonDeductibleVat), colors.yellow);
 
   y = 452;
   addSectionTitle("Boekingen");
@@ -921,10 +975,12 @@ function buildReportPdf(admin: Administration, summary: Summary, periodLabel: st
       widths: [340, 171],
       rows: [
         ["Omzet excl. btw", money.format(summary.revenue)],
-        ["Kosten excl. btw", money.format(summary.costs)],
+        ["Kosten incl. niet-aftrekbare btw", money.format(summary.costs)],
         ["Resultaat", money.format(profit)],
         ["Ontvangen btw", money.format(summary.vatToPay)],
-        ["Betaalde btw", money.format(summary.vatToClaim)],
+        ["Betaalde btw op kosten", money.format(summary.inputVatTotal)],
+        ["Aftrekbare voorbelasting", money.format(summary.vatToClaim)],
+        ["Niet-aftrekbare btw als kosten", money.format(summary.nonDeductibleVat)],
         [vatBalance >= 0 ? "Btw te betalen" : "Btw terug te vragen", money.format(Math.abs(vatBalance))],
         ["Afschrijvingen per jaar", money.format(summary.annualDepreciation)],
         ["Open posten incl. btw", money.format(summary.open)],
@@ -1213,6 +1269,8 @@ export default function Home() {
   }, [administrations, hydrated, workspacePin, workspaceState]);
 
   const active = administrations.find((admin) => admin.id === activeId) ?? administrations[0];
+  const vatDeductionSettings = getVatDeductionSettings(active);
+  const vatDeductionPercent = calculateVatDeductionPercent(vatDeductionSettings);
   const activeSalaries = getAdminSalaries(active);
   const activePayrollEmployees = getPayrollEmployees(active);
   const fiscalYearSalaries = useMemo(
@@ -1243,14 +1301,17 @@ export default function Home() {
     [active.entries, active.fiscalYear, period],
   );
   const quarterSummaries = useMemo(
-    () => getQuarterSummaries(active.entries, active.fiscalYear),
-    [active.entries, active.fiscalYear],
+    () => getQuarterSummaries(active.entries, active.fiscalYear, vatDeductionPercent),
+    [active.entries, active.fiscalYear, vatDeductionPercent],
   );
   const periodLabel = getPeriodLabel(period);
-  const summary = useMemo(() => calculateTotals(filteredEntries), [filteredEntries]);
+  const summary = useMemo(
+    () => calculateTotals(filteredEntries, vatDeductionPercent),
+    [filteredEntries, vatDeductionPercent],
+  );
   const profitLossStatement = useMemo(
-    () => buildProfitLossStatement(filteredEntries),
-    [filteredEntries],
+    () => buildProfitLossStatement(filteredEntries, vatDeductionPercent),
+    [filteredEntries, vatDeductionPercent],
   );
   const profit = summary.revenue - summary.costs;
   const vatBalance = summary.vatToPay - summary.vatToClaim;
@@ -1277,6 +1338,12 @@ export default function Home() {
     ["IBAN", active.iban],
   ].filter(([, value]) => !String(value).trim());
   const openEntries = filteredEntries.filter((entry) => entry.status === "open");
+  const taxableIncomeFromEntries = filteredEntries
+    .filter((entry) => entry.type === "income" && entry.vatRate > 0)
+    .reduce((total, entry) => total + entry.amount, 0);
+  const exemptIncomeFromEntries = filteredEntries
+    .filter((entry) => entry.type === "income" && entry.vatRate === 0)
+    .reduce((total, entry) => total + entry.amount, 0);
   const openSalaries = fiscalYearSalaries.filter((salary) => salary.status === "open");
   const depreciationCandidates = filteredEntries.filter(
     (entry) =>
@@ -1677,6 +1744,32 @@ export default function Home() {
 
   const updateSettings = (field: keyof Administration, value: string | number) => {
     updateActive({ ...active, [field]: value });
+  };
+
+  const updateVatDeduction = (
+    field: keyof VatDeductionSettings,
+    value: string | number | boolean | undefined,
+  ) => {
+    updateActive({
+      ...active,
+      vatDeduction: {
+        ...vatDeductionSettings,
+        [field]: value,
+      },
+    });
+  };
+
+  const useVatTurnoverFromEntries = () => {
+    updateActive({
+      ...active,
+      vatDeduction: {
+        ...vatDeductionSettings,
+        enabled: true,
+        taxableTurnover: taxableIncomeFromEntries,
+        exemptTurnover: exemptIncomeFromEntries,
+        manualPercent: undefined,
+      },
+    });
   };
 
   const setupWorkspace = async (event: FormEvent<HTMLFormElement>) => {
@@ -2634,6 +2727,99 @@ export default function Home() {
                 button="Download PDF"
                 onClick={downloadPayrollOverview}
               />
+              <section className="panel xl:col-span-3">
+                <div className="section-title">
+                  <div>
+                    <p className="eyebrow">Gemengde btw · {periodLabel}</p>
+                    <h3>Aftrekbare voorbelasting berekenen</h3>
+                  </div>
+                  <span className="status-pill">
+                    {vatDeductionSettings.enabled
+                      ? `${vatDeductionPercent.toFixed(1)}% aftrekbaar`
+                      : "100% aftrekbaar"}
+                  </span>
+                </div>
+                <div className="mt-5 grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+                  <div className="vat-tool-grid">
+                    <label className="toggle-line">
+                      <input
+                        checked={vatDeductionSettings.enabled}
+                        onChange={(event) => updateVatDeduction("enabled", event.target.checked)}
+                        type="checkbox"
+                      />
+                      <span>Deze administratie heeft ook btw-vrijgestelde omzet</span>
+                    </label>
+                    <Field label="Btw-belaste omzet">
+                      <input
+                        className="input"
+                        inputMode="decimal"
+                        value={vatDeductionSettings.taxableTurnover || ""}
+                        onChange={(event) =>
+                          updateVatDeduction(
+                            "taxableTurnover",
+                            Number(event.target.value.replace(",", ".")) || 0,
+                          )
+                        }
+                      />
+                    </Field>
+                    <Field label="Btw-vrijgestelde omzet">
+                      <input
+                        className="input"
+                        inputMode="decimal"
+                        value={vatDeductionSettings.exemptTurnover || ""}
+                        onChange={(event) =>
+                          updateVatDeduction(
+                            "exemptTurnover",
+                            Number(event.target.value.replace(",", ".")) || 0,
+                          )
+                        }
+                      />
+                    </Field>
+                    <Field label="Handmatig percentage">
+                      <input
+                        className="input"
+                        inputMode="decimal"
+                        placeholder="Leeg = automatisch"
+                        value={vatDeductionSettings.manualPercent ?? ""}
+                        onChange={(event) => {
+                          const value = event.target.value.trim();
+                          updateVatDeduction(
+                            "manualPercent",
+                            value ? Number(value.replace(",", ".")) : undefined,
+                          );
+                        }}
+                      />
+                    </Field>
+                    <button className="secondary-button justify-center" onClick={useVatTurnoverFromEntries}>
+                      Neem omzet uit boekingen over
+                    </button>
+                  </div>
+                  <div className="vat-result-card">
+                    <p className="eyebrow">Doorwerking</p>
+                    <dl className="mt-4 grid gap-3 text-sm">
+                      <div className="summary-line">
+                        <dt>Betaalde btw op kosten</dt>
+                        <dd>{money.format(summary.inputVatTotal)}</dd>
+                      </div>
+                      <div className="summary-line">
+                        <dt>Aftrekbare voorbelasting</dt>
+                        <dd>{money.format(summary.vatToClaim)}</dd>
+                      </div>
+                      <div className="summary-line">
+                        <dt>Niet-aftrekbare btw naar kosten</dt>
+                        <dd>{money.format(summary.nonDeductibleVat)}</dd>
+                      </div>
+                      <div className="summary-line">
+                        <dt>Aftrekpercentage</dt>
+                        <dd>{vatDeductionPercent.toFixed(2)}%</dd>
+                      </div>
+                    </dl>
+                    <p className="mt-4 text-sm leading-6 text-[var(--muted)]">
+                      Het niet-aftrekbare deel wordt automatisch als kosten meegenomen in de winst- en verliesrekening.
+                    </p>
+                  </div>
+                </div>
+              </section>
               <ProfitLossPanel statement={profitLossStatement} periodLabel={periodLabel} />
               <section className="panel xl:col-span-2">
                 <div className="section-title">
@@ -2644,16 +2830,12 @@ export default function Home() {
                 </div>
                 <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                   <Metric label="Ontvangen btw" value={money.format(summary.vatToPay)} accent="teal" />
-                  <Metric label="Betaalde btw" value={money.format(summary.vatToClaim)} accent="blue" />
+                  <Metric label="Aftrekbare btw" value={money.format(summary.vatToClaim)} accent="blue" />
+                  <Metric label="Niet aftrekbaar" value={money.format(summary.nonDeductibleVat)} accent="yellow" />
                   <Metric
                     label={vatBalance >= 0 ? "Te betalen" : "Terug te vragen"}
                     value={money.format(Math.abs(vatBalance))}
                     accent={vatBalance >= 0 ? "coral" : "blue"}
-                  />
-                  <Metric
-                    label="Afschrijving p.j."
-                    value={money.format(summary.annualDepreciation)}
-                    accent="yellow"
                   />
                 </div>
                 <p className="mt-4 text-sm leading-6 text-[var(--muted)]">
