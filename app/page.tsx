@@ -47,6 +47,7 @@ type Contact = {
 
 type SalaryRecord = {
   id: string;
+  employeeId?: string;
   employeeName: string;
   employeeBirthDate?: string;
   employeeAddress?: string;
@@ -57,6 +58,16 @@ type SalaryRecord = {
   employerHealthContribution: number;
   status: EntryStatus;
   paymentDate: string;
+};
+
+type PayrollEmployee = {
+  id: string;
+  name: string;
+  birthDate: string;
+  postalCode: string;
+  houseNumber: string;
+  houseAddition: string;
+  address: string;
 };
 
 type Administration = {
@@ -70,6 +81,7 @@ type Administration = {
   iban: string;
   entries: Entry[];
   contacts: Contact[];
+  payrollEmployees?: PayrollEmployee[];
   salaries?: SalaryRecord[];
 };
 
@@ -141,12 +153,22 @@ const starterData: Administration[] = [
     vatNumber: "NL812345678B01",
     fiscalYear: 2026,
     iban: "NL91 ABNA 0417 1643 00",
+    payrollEmployees: [
+      {
+        id: "employee-1",
+        name: "Sanne de Vries",
+        birthDate: "1982-04-12",
+        postalCode: "1011 AA",
+        houseNumber: "12",
+        houseAddition: "",
+        address: "Havenstraat 12, 1011 AA Amsterdam",
+      },
+    ],
     salaries: [
       {
         id: "salary-1",
+        employeeId: "employee-1",
         employeeName: "Sanne de Vries",
-        employeeBirthDate: "1982-04-12",
-        employeeAddress: "Havenstraat 12, 1011 AA Amsterdam",
         period: "2026-07",
         grossSalary: 4200,
         wageTax: 1460,
@@ -233,9 +255,8 @@ const emptyContact = {
 };
 
 const emptySalary = {
+  employeeId: "",
   employeeName: "",
-  employeeBirthDate: "",
-  employeeAddress: "",
   period: today.slice(0, 7),
   grossSalary: "",
   wageTax: "",
@@ -243,6 +264,15 @@ const emptySalary = {
   employerHealthContribution: "",
   status: "open" as EntryStatus,
   paymentDate: today,
+};
+
+const emptyPayrollEmployee = {
+  name: "",
+  birthDate: "",
+  postalCode: "",
+  houseNumber: "",
+  houseAddition: "",
+  address: "",
 };
 
 function calculateTotals(entries: Entry[]) {
@@ -367,6 +397,31 @@ function getAdminSalaries(admin: Administration) {
   return admin.salaries ?? [];
 }
 
+function getPayrollEmployees(admin: Administration) {
+  return admin.payrollEmployees ?? [];
+}
+
+function getSalaryEmployee(admin: Administration, salary: SalaryRecord) {
+  const employees = getPayrollEmployees(admin);
+  return (
+    employees.find((employee) => employee.id === salary.employeeId) ??
+    employees.find((employee) => employee.name === salary.employeeName) ??
+    null
+  );
+}
+
+function getSalaryEmployeeName(admin: Administration, salary: SalaryRecord) {
+  return getSalaryEmployee(admin, salary)?.name || salary.employeeName;
+}
+
+function getSalaryEmployeeBirthDate(admin: Administration, salary: SalaryRecord) {
+  return getSalaryEmployee(admin, salary)?.birthDate || salary.employeeBirthDate || "";
+}
+
+function getSalaryEmployeeAddress(admin: Administration, salary: SalaryRecord) {
+  return getSalaryEmployee(admin, salary)?.address || salary.employeeAddress || "";
+}
+
 function getSalaryYear(period: string) {
   return Number(period.slice(0, 4));
 }
@@ -400,6 +455,29 @@ function calculateSalaryTotals(salaries: SalaryRecord[]) {
       openCount: 0,
     },
   );
+}
+
+function calculateLaborTaxCredit(annualGrossSalary: number, fiscalYear: number) {
+  const supportedYear = fiscalYear >= 2025 ? 2025 : fiscalYear;
+  if (supportedYear !== 2025 || annualGrossSalary <= 0) return 0;
+
+  if (annualGrossSalary <= 12169) {
+    return Math.round(annualGrossSalary * 0.08053);
+  }
+
+  if (annualGrossSalary <= 26288) {
+    return Math.round(980 + (annualGrossSalary - 12169) * 0.3003);
+  }
+
+  if (annualGrossSalary <= 43071) {
+    return Math.round(5220 + (annualGrossSalary - 26288) * 0.02258);
+  }
+
+  if (annualGrossSalary <= 129078) {
+    return Math.max(0, Math.round(5599 - (annualGrossSalary - 43071) * 0.0651));
+  }
+
+  return 0;
 }
 
 function contactTypeLabel(type: Contact["type"]) {
@@ -930,15 +1008,19 @@ function buildContactsPdf(admin: Administration) {
 }
 
 function buildPayslipPdf(admin: Administration, salary: SalaryRecord) {
+  const employeeName = getSalaryEmployeeName(admin, salary);
+  const employeeBirthDate = getSalaryEmployeeBirthDate(admin, salary);
+  const employeeAddress = getSalaryEmployeeAddress(admin, salary);
+
   return buildTablePdf(admin, "Loonstrook", getSalaryMonthLabel(salary.period), [
     {
       title: "Werknemer en periode",
       headers: ["Onderdeel", "Gegeven"],
       widths: [190, 321],
       rows: [
-        ["Werknemer", salary.employeeName],
-        ["Geboortedatum", salary.employeeBirthDate || "-"],
-        ["Adres werknemer", salary.employeeAddress || "-"],
+        ["Werknemer", employeeName],
+        ["Geboortedatum", employeeBirthDate || "-"],
+        ["Adres werknemer", employeeAddress || "-"],
         ["Periode", getSalaryMonthLabel(salary.period)],
         ["Betaaldatum", salary.paymentDate || "-"],
         ["Status", salary.status === "paid" ? "Betaald" : "Open"],
@@ -975,16 +1057,18 @@ function buildAnnualIncomeStatementPdf(
   salaries: SalaryRecord[],
 ) {
   const totals = calculateSalaryTotals(salaries);
+  const laborTaxCredit = calculateLaborTaxCredit(totals.grossSalary, admin.fiscalYear);
   const firstSalary = salaries[0];
+  const employee = firstSalary ? getSalaryEmployee(admin, firstSalary) : null;
   return buildTablePdf(admin, "Jaaropgave", String(admin.fiscalYear), [
     {
       title: "Werknemer",
       headers: ["Onderdeel", "Gegeven"],
       widths: [190, 321],
       rows: [
-        ["Werknemer", employeeName],
-        ["Geboortedatum", firstSalary?.employeeBirthDate || "-"],
-        ["Adres werknemer", firstSalary?.employeeAddress || "-"],
+        ["Werknemer", employee?.name || employeeName],
+        ["Geboortedatum", employee?.birthDate || firstSalary?.employeeBirthDate || "-"],
+        ["Adres werknemer", employee?.address || firstSalary?.employeeAddress || "-"],
         ["Werkgever", admin.name],
         ["Loonheffingennummer", admin.wageTaxNumber || "-"],
         ["Boekjaar", admin.fiscalYear],
@@ -998,6 +1082,7 @@ function buildAnnualIncomeStatementPdf(
       rows: [
         ["Fiscaal loon / brutoloon", money.format(totals.grossSalary)],
         ["Ingehouden loonheffing", money.format(totals.wageTax)],
+        ["Verrekende arbeidskorting", money.format(laborTaxCredit)],
         ["Netto uitbetaald", money.format(totals.netSalary)],
         ["Werkgeversbijdrage Zvw", money.format(totals.employerHealthContribution)],
       ],
@@ -1013,7 +1098,7 @@ function buildPayrollOverviewPdf(admin: Administration, salaries: SalaryRecord[]
       widths: [78, 145, 74, 82, 74, 58],
       rows: salaries.map((salary) => [
         getSalaryMonthLabel(salary.period),
-        salary.employeeName,
+        getSalaryEmployeeName(admin, salary),
         money.format(salary.grossSalary),
         money.format(salary.wageTax),
         money.format(salary.netSalary),
@@ -1036,6 +1121,9 @@ export default function Home() {
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
   const [salaryForm, setSalaryForm] = useState(emptySalary);
   const [editingSalaryId, setEditingSalaryId] = useState<string | null>(null);
+  const [payrollEmployeeForm, setPayrollEmployeeForm] = useState(emptyPayrollEmployee);
+  const [editingPayrollEmployeeId, setEditingPayrollEmployeeId] = useState<string | null>(null);
+  const [addressLookupStatus, setAddressLookupStatus] = useState("");
   const [kvkQuery, setKvkQuery] = useState("");
   const [kvkStatus, setKvkStatus] = useState("");
   const [period, setPeriod] = useState<PeriodKey>("year");
@@ -1126,6 +1214,7 @@ export default function Home() {
 
   const active = administrations.find((admin) => admin.id === activeId) ?? administrations[0];
   const activeSalaries = getAdminSalaries(active);
+  const activePayrollEmployees = getPayrollEmployees(active);
   const fiscalYearSalaries = useMemo(
     () => filterSalariesByYear(activeSalaries, active.fiscalYear),
     [activeSalaries, active.fiscalYear],
@@ -1134,9 +1223,20 @@ export default function Home() {
     () => calculateSalaryTotals(fiscalYearSalaries),
     [fiscalYearSalaries],
   );
-  const salaryEmployees = useMemo(
-    () => Array.from(new Set(fiscalYearSalaries.map((salary) => salary.employeeName))).sort(),
-    [fiscalYearSalaries],
+  const salaryEmployeeGroups = useMemo(
+    () =>
+      Array.from(
+        fiscalYearSalaries.reduce((groups, salary) => {
+          const employee = getSalaryEmployee(active, salary);
+          const key = employee?.id ?? `legacy-${salary.employeeName}`;
+          const label = employee?.name ?? salary.employeeName;
+          const group = groups.get(key) ?? { key, label, salaries: [] as SalaryRecord[] };
+          group.salaries.push(salary);
+          groups.set(key, group);
+          return groups;
+        }, new Map<string, { key: string; label: string; salaries: SalaryRecord[] }>()),
+      ).map(([, group]) => group),
+    [active, fiscalYearSalaries],
   );
   const filteredEntries = useMemo(
     () => filterEntriesByPeriod(active.entries, active.fiscalYear, period),
@@ -1332,6 +1432,9 @@ export default function Home() {
 
   const saveSalary = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const selectedEmployee = activePayrollEmployees.find(
+      (employee) => employee.id === salaryForm.employeeId,
+    );
     const grossSalary = Number(salaryForm.grossSalary.toString().replace(",", "."));
     const wageTax = Number(salaryForm.wageTax.toString().replace(",", "."));
     const netSalary = Number(salaryForm.netSalary.toString().replace(",", "."));
@@ -1339,7 +1442,7 @@ export default function Home() {
       salaryForm.employerHealthContribution.toString().replace(",", "."),
     );
     if (
-      !salaryForm.employeeName.trim() ||
+      !(selectedEmployee || salaryForm.employeeName.trim()) ||
       !salaryForm.period ||
       !Number.isFinite(grossSalary) ||
       !Number.isFinite(wageTax) ||
@@ -1350,9 +1453,8 @@ export default function Home() {
 
     const salary: SalaryRecord = {
       id: editingSalaryId ?? uid(),
-      employeeName: salaryForm.employeeName.trim(),
-      employeeBirthDate: salaryForm.employeeBirthDate,
-      employeeAddress: salaryForm.employeeAddress.trim(),
+      employeeId: selectedEmployee?.id || undefined,
+      employeeName: selectedEmployee?.name || salaryForm.employeeName.trim(),
       period: salaryForm.period,
       grossSalary,
       wageTax,
@@ -1376,9 +1478,8 @@ export default function Home() {
 
   const editSalary = (salary: SalaryRecord) => {
     setSalaryForm({
+      employeeId: salary.employeeId ?? "",
       employeeName: salary.employeeName,
-      employeeBirthDate: salary.employeeBirthDate ?? "",
-      employeeAddress: salary.employeeAddress ?? "",
       period: salary.period,
       grossSalary: String(salary.grossSalary).replace(".", ","),
       wageTax: String(salary.wageTax).replace(".", ","),
@@ -1389,6 +1490,99 @@ export default function Home() {
     });
     setEditingSalaryId(salary.id);
     setTab("payroll");
+  };
+
+  const lookupPayrollAddress = async () => {
+    const postalCode = payrollEmployeeForm.postalCode.trim();
+    const houseNumber = payrollEmployeeForm.houseNumber.trim();
+    if (!postalCode || !houseNumber) {
+      setAddressLookupStatus("Vul eerst postcode en huisnummer in.");
+      return;
+    }
+
+    setAddressLookupStatus("Adres zoeken...");
+    try {
+      const params = new URLSearchParams({
+        postalCode,
+        houseNumber,
+        addition: payrollEmployeeForm.houseAddition.trim(),
+      });
+      const response = await fetch(`/api/address/lookup?${params}`);
+      const data = (await response.json()) as { address?: string; error?: string };
+      if (!response.ok || !data.address) {
+        throw new Error(data.error ?? "Adres niet gevonden.");
+      }
+      setPayrollEmployeeForm({ ...payrollEmployeeForm, address: data.address });
+      setAddressLookupStatus("Adres ingevuld. Controleer het adres nog kort.");
+    } catch (error) {
+      setAddressLookupStatus(
+        error instanceof Error ? error.message : "Adres zoeken mislukt.",
+      );
+    }
+  };
+
+  const savePayrollEmployee = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const name = payrollEmployeeForm.name.trim();
+    if (!name) return;
+
+    const employee: PayrollEmployee = {
+      id: editingPayrollEmployeeId ?? uid(),
+      name,
+      birthDate: payrollEmployeeForm.birthDate,
+      postalCode: payrollEmployeeForm.postalCode.trim(),
+      houseNumber: payrollEmployeeForm.houseNumber.trim(),
+      houseAddition: payrollEmployeeForm.houseAddition.trim(),
+      address: payrollEmployeeForm.address.trim(),
+    };
+
+    const previous = activePayrollEmployees.find(
+      (item) => item.id === editingPayrollEmployeeId,
+    );
+    const payrollEmployees = editingPayrollEmployeeId
+      ? activePayrollEmployees.map((item) =>
+          item.id === editingPayrollEmployeeId ? employee : item,
+        )
+      : [employee, ...activePayrollEmployees];
+    const salaries =
+      previous && previous.name !== employee.name
+        ? activeSalaries.map((salary) =>
+            salary.employeeId === previous.id
+              ? { ...salary, employeeName: employee.name }
+              : salary,
+          )
+        : activeSalaries;
+
+    updateActive({
+      ...active,
+      payrollEmployees,
+      salaries,
+    });
+    setPayrollEmployeeForm(emptyPayrollEmployee);
+    setEditingPayrollEmployeeId(null);
+    setAddressLookupStatus("");
+    if (!salaryForm.employeeId) {
+      setSalaryForm({ ...salaryForm, employeeId: employee.id, employeeName: employee.name });
+    }
+  };
+
+  const editPayrollEmployee = (employee: PayrollEmployee) => {
+    setPayrollEmployeeForm({
+      name: employee.name,
+      birthDate: employee.birthDate,
+      postalCode: employee.postalCode,
+      houseNumber: employee.houseNumber,
+      houseAddition: employee.houseAddition,
+      address: employee.address,
+    });
+    setEditingPayrollEmployeeId(employee.id);
+    setAddressLookupStatus("");
+  };
+
+  const cancelEditPayrollEmployee = () => {
+    setPayrollEmployeeForm(emptyPayrollEmployee);
+    setEditingPayrollEmployeeId(null);
+    setAddressLookupStatus("");
   };
 
   const cancelEditSalary = () => {
@@ -1572,10 +1766,7 @@ export default function Home() {
     );
   };
 
-  const downloadAnnualIncomeStatement = (employeeName: string) => {
-    const employeeSalaries = fiscalYearSalaries.filter(
-      (salary) => salary.employeeName === employeeName,
-    );
+  const downloadAnnualIncomeStatement = (employeeName: string, employeeSalaries: SalaryRecord[]) => {
     downloadBlob(
       `${administrationFileBase}-jaaropgave-${safeFileName(employeeName)}.pdf`,
       buildAnnualIncomeStatementPdf(active, employeeName, employeeSalaries),
@@ -1990,6 +2181,112 @@ export default function Home() {
               <section className="panel">
                 <div className="section-title">
                   <div>
+                    <p className="eyebrow">Eenmalig vastleggen</p>
+                    <h3>DGA-gegevens</h3>
+                  </div>
+                  {editingPayrollEmployeeId ? (
+                    <button className="ghost-button" onClick={cancelEditPayrollEmployee} type="button">
+                      Annuleer
+                    </button>
+                  ) : null}
+                </div>
+                <form className="mt-4 grid gap-3" onSubmit={savePayrollEmployee}>
+                  <div className="payroll-employee-grid">
+                    <Field label="Naam DGA / werknemer">
+                      <input
+                        className="input"
+                        value={payrollEmployeeForm.name}
+                        onChange={(event) =>
+                          setPayrollEmployeeForm({ ...payrollEmployeeForm, name: event.target.value })
+                        }
+                      />
+                    </Field>
+                    <Field label="Geboortedatum">
+                      <input
+                        className="input"
+                        type="date"
+                        value={payrollEmployeeForm.birthDate}
+                        onChange={(event) =>
+                          setPayrollEmployeeForm({ ...payrollEmployeeForm, birthDate: event.target.value })
+                        }
+                      />
+                    </Field>
+                    <Field label="Postcode">
+                      <input
+                        className="input"
+                        placeholder="1234 AB"
+                        value={payrollEmployeeForm.postalCode}
+                        onChange={(event) =>
+                          setPayrollEmployeeForm({ ...payrollEmployeeForm, postalCode: event.target.value })
+                        }
+                      />
+                    </Field>
+                    <Field label="Huisnummer">
+                      <input
+                        className="input"
+                        inputMode="numeric"
+                        value={payrollEmployeeForm.houseNumber}
+                        onChange={(event) =>
+                          setPayrollEmployeeForm({ ...payrollEmployeeForm, houseNumber: event.target.value })
+                        }
+                      />
+                    </Field>
+                    <Field label="Toevoeging">
+                      <input
+                        className="input"
+                        placeholder="A"
+                        value={payrollEmployeeForm.houseAddition}
+                        onChange={(event) =>
+                          setPayrollEmployeeForm({ ...payrollEmployeeForm, houseAddition: event.target.value })
+                        }
+                      />
+                    </Field>
+                    <Field label="Adres">
+                      <input
+                        className="input"
+                        value={payrollEmployeeForm.address}
+                        onChange={(event) =>
+                          setPayrollEmployeeForm({ ...payrollEmployeeForm, address: event.target.value })
+                        }
+                      />
+                    </Field>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button className="secondary-button" onClick={lookupPayrollAddress} type="button">
+                      Vul adres automatisch
+                    </button>
+                    <button className="primary-button justify-center py-3 md:w-fit">
+                      {editingPayrollEmployeeId ? "DGA-gegevens opslaan" : "DGA toevoegen"}
+                    </button>
+                    <span className="text-xs font-medium text-[var(--muted)]">
+                      {addressLookupStatus || "Vul postcode en huisnummer in om het adres op te halen."}
+                    </span>
+                  </div>
+                </form>
+                <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                  {activePayrollEmployees.map((employee) => (
+                    <div className="payroll-person-card" key={employee.id}>
+                      <div>
+                        <strong>{employee.name}</strong>
+                        <span>{employee.birthDate || "Geen geboortedatum"}</span>
+                        <span>{employee.address || "Geen adres"}</span>
+                      </div>
+                      <button className="ghost-button" onClick={() => editPayrollEmployee(employee)}>
+                        Bewerk
+                      </button>
+                    </div>
+                  ))}
+                  {!activePayrollEmployees.length ? (
+                    <p className="rounded-lg bg-white p-4 text-sm text-[var(--muted)]">
+                      Leg eerst de DGA vast. Daarna kun je bij elke salarisregel alleen de DGA kiezen.
+                    </p>
+                  ) : null}
+                </div>
+              </section>
+
+              <section className="panel">
+                <div className="section-title">
+                  <div>
                     <p className="eyebrow">{editingSalaryId ? "Correctie" : "Nieuwe salarisregel"}</p>
                     <h3>{editingSalaryId ? "Salaris bewerken" : "DGA-salaris registreren"}</h3>
                   </div>
@@ -2002,26 +2299,27 @@ export default function Home() {
                 <form className="mt-4 grid gap-3" onSubmit={saveSalary}>
                   <div className="salary-form-grid">
                     <Field label="DGA / werknemer">
-                      <input
+                      <select
                         className="input"
-                        value={salaryForm.employeeName}
-                        onChange={(event) => setSalaryForm({ ...salaryForm, employeeName: event.target.value })}
-                      />
-                    </Field>
-                    <Field label="Geboortedatum">
-                      <input
-                        className="input"
-                        type="date"
-                        value={salaryForm.employeeBirthDate}
-                        onChange={(event) => setSalaryForm({ ...salaryForm, employeeBirthDate: event.target.value })}
-                      />
-                    </Field>
-                    <Field label="Adres DGA / werknemer">
-                      <input
-                        className="input"
-                        value={salaryForm.employeeAddress}
-                        onChange={(event) => setSalaryForm({ ...salaryForm, employeeAddress: event.target.value })}
-                      />
+                        value={salaryForm.employeeId}
+                        onChange={(event) => {
+                          const employee = activePayrollEmployees.find(
+                            (item) => item.id === event.target.value,
+                          );
+                          setSalaryForm({
+                            ...salaryForm,
+                            employeeId: event.target.value,
+                            employeeName: employee?.name ?? "",
+                          });
+                        }}
+                      >
+                        <option value="">Kies DGA / werknemer</option>
+                        {activePayrollEmployees.map((employee) => (
+                          <option key={employee.id} value={employee.id}>
+                            {employee.name}
+                          </option>
+                        ))}
+                      </select>
                     </Field>
                     <Field label="Periode">
                       <input
@@ -2115,9 +2413,9 @@ export default function Home() {
                         <tr className="border-b border-[var(--line)] last:border-b-0" key={salary.id}>
                           <td className="py-3 pr-3">{getSalaryMonthLabel(salary.period)}</td>
                           <td className="py-3 pr-3">
-                            <strong>{salary.employeeName}</strong>
+                            <strong>{getSalaryEmployeeName(active, salary)}</strong>
                             <span className="mt-1 block text-xs text-[var(--muted)]">
-                              {salary.employeeBirthDate || "Geen geboortedatum"} · {salary.employeeAddress || "Geen adres"}
+                              {getSalaryEmployeeBirthDate(active, salary) || "Geen geboortedatum"} · {getSalaryEmployeeAddress(active, salary) || "Geen adres"}
                             </span>
                             <span className="mt-1 block text-xs text-[var(--muted)]">
                               Betaaldatum {salary.paymentDate || "-"}
@@ -2155,15 +2453,15 @@ export default function Home() {
                     </p>
                   )}
                 </div>
-                {salaryEmployees.length ? (
+                {salaryEmployeeGroups.length ? (
                   <div className="mt-5 grid gap-2 border-t border-[var(--line)] pt-4 md:grid-cols-2 xl:grid-cols-3">
-                    {salaryEmployees.map((employeeName) => (
+                    {salaryEmployeeGroups.map((group) => (
                       <button
                         className="secondary-button justify-center"
-                        key={employeeName}
-                        onClick={() => downloadAnnualIncomeStatement(employeeName)}
+                        key={group.key}
+                        onClick={() => downloadAnnualIncomeStatement(group.label, group.salaries)}
                       >
-                        Jaaropgave {employeeName}
+                        Jaaropgave {group.label}
                       </button>
                     ))}
                   </div>

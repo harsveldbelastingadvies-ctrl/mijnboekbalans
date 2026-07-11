@@ -276,9 +276,32 @@ select:focus-visible {
 }
 
 .entry-form-grid,
-.salary-form-grid {
+.salary-form-grid,
+.payroll-employee-grid {
   display: grid;
   gap: 0.75rem;
+}
+
+.payroll-person-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  padding: 0.9rem;
+}
+
+.payroll-person-card strong,
+.payroll-person-card span {
+  display: block;
+}
+
+.payroll-person-card span {
+  margin-top: 0.2rem;
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 .kvk-search-box {
@@ -526,6 +549,10 @@ select:focus-visible {
 
   .salary-form-grid {
     grid-template-columns: minmax(14rem, 1.4fr) repeat(3, minmax(9rem, 1fr));
+  }
+
+  .payroll-employee-grid {
+    grid-template-columns: minmax(14rem, 1.2fr) minmax(9rem, 0.8fr) minmax(8rem, 0.65fr) minmax(7rem, 0.55fr) minmax(7rem, 0.55fr) minmax(16rem, 1.5fr);
   }
 }
 

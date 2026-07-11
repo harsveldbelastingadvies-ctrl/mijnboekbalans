@@ -28,6 +28,7 @@ type Contact = {
 
 type SalaryRecord = {
   id: string;
+  employeeId?: string;
   employeeName: string;
   employeeBirthDate?: string;
   employeeAddress?: string;
@@ -38,6 +39,16 @@ type SalaryRecord = {
   employerHealthContribution: number;
   status: "paid" | "open";
   paymentDate: string;
+};
+
+type PayrollEmployee = {
+  id: string;
+  name: string;
+  birthDate: string;
+  postalCode: string;
+  houseNumber: string;
+  houseAddition: string;
+  address: string;
 };
 
 type D1Statement<T = unknown> = {
@@ -61,6 +72,7 @@ type Administration = {
   iban: string;
   entries: Entry[];
   contacts: Contact[];
+  payrollEmployees?: PayrollEmployee[];
   salaries?: SalaryRecord[];
 };
 
