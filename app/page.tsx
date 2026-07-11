@@ -48,6 +48,8 @@ type Contact = {
 type SalaryRecord = {
   id: string;
   employeeName: string;
+  employeeBirthDate?: string;
+  employeeAddress?: string;
   period: string;
   grossSalary: number;
   wageTax: number;
@@ -63,6 +65,7 @@ type Administration = {
   owner: string;
   kvk: string;
   vatNumber: string;
+  wageTaxNumber?: string;
   fiscalYear: number;
   iban: string;
   entries: Entry[];
@@ -142,6 +145,8 @@ const starterData: Administration[] = [
       {
         id: "salary-1",
         employeeName: "Sanne de Vries",
+        employeeBirthDate: "1982-04-12",
+        employeeAddress: "Havenstraat 12, 1011 AA Amsterdam",
         period: "2026-07",
         grossSalary: 4200,
         wageTax: 1460,
@@ -229,6 +234,8 @@ const emptyContact = {
 
 const emptySalary = {
   employeeName: "",
+  employeeBirthDate: "",
+  employeeAddress: "",
   period: today.slice(0, 7),
   grossSalary: "",
   wageTax: "",
@@ -930,9 +937,22 @@ function buildPayslipPdf(admin: Administration, salary: SalaryRecord) {
       widths: [190, 321],
       rows: [
         ["Werknemer", salary.employeeName],
+        ["Geboortedatum", salary.employeeBirthDate || "-"],
+        ["Adres werknemer", salary.employeeAddress || "-"],
         ["Periode", getSalaryMonthLabel(salary.period)],
         ["Betaaldatum", salary.paymentDate || "-"],
         ["Status", salary.status === "paid" ? "Betaald" : "Open"],
+      ],
+    },
+    {
+      title: "Werkgever",
+      headers: ["Onderdeel", "Gegeven"],
+      widths: [190, 321],
+      rows: [
+        ["Werkgever", admin.name],
+        ["Loonheffingennummer", admin.wageTaxNumber || "-"],
+        ["KvK", admin.kvk || "-"],
+        ["Vestiging / ondernemer", admin.owner || "-"],
       ],
     },
     {
@@ -955,6 +975,7 @@ function buildAnnualIncomeStatementPdf(
   salaries: SalaryRecord[],
 ) {
   const totals = calculateSalaryTotals(salaries);
+  const firstSalary = salaries[0];
   return buildTablePdf(admin, "Jaaropgave", String(admin.fiscalYear), [
     {
       title: "Werknemer",
@@ -962,7 +983,10 @@ function buildAnnualIncomeStatementPdf(
       widths: [190, 321],
       rows: [
         ["Werknemer", employeeName],
+        ["Geboortedatum", firstSalary?.employeeBirthDate || "-"],
+        ["Adres werknemer", firstSalary?.employeeAddress || "-"],
         ["Werkgever", admin.name],
+        ["Loonheffingennummer", admin.wageTaxNumber || "-"],
         ["Boekjaar", admin.fiscalYear],
         ["Aantal loontijdvakken", salaries.length],
       ],
@@ -1149,6 +1173,7 @@ export default function Home() {
     ["Ondernemer", active.owner],
     ["KvK", active.kvk],
     ["Btw-nummer", active.vatNumber],
+    ["Loonheffingennummer", active.wageTaxNumber],
     ["IBAN", active.iban],
   ].filter(([, value]) => !String(value).trim());
   const openEntries = filteredEntries.filter((entry) => entry.status === "open");
@@ -1326,6 +1351,8 @@ export default function Home() {
     const salary: SalaryRecord = {
       id: editingSalaryId ?? uid(),
       employeeName: salaryForm.employeeName.trim(),
+      employeeBirthDate: salaryForm.employeeBirthDate,
+      employeeAddress: salaryForm.employeeAddress.trim(),
       period: salaryForm.period,
       grossSalary,
       wageTax,
@@ -1350,6 +1377,8 @@ export default function Home() {
   const editSalary = (salary: SalaryRecord) => {
     setSalaryForm({
       employeeName: salary.employeeName,
+      employeeBirthDate: salary.employeeBirthDate ?? "",
+      employeeAddress: salary.employeeAddress ?? "",
       period: salary.period,
       grossSalary: String(salary.grossSalary).replace(".", ","),
       wageTax: String(salary.wageTax).replace(".", ","),
@@ -1979,6 +2008,21 @@ export default function Home() {
                         onChange={(event) => setSalaryForm({ ...salaryForm, employeeName: event.target.value })}
                       />
                     </Field>
+                    <Field label="Geboortedatum">
+                      <input
+                        className="input"
+                        type="date"
+                        value={salaryForm.employeeBirthDate}
+                        onChange={(event) => setSalaryForm({ ...salaryForm, employeeBirthDate: event.target.value })}
+                      />
+                    </Field>
+                    <Field label="Adres DGA / werknemer">
+                      <input
+                        className="input"
+                        value={salaryForm.employeeAddress}
+                        onChange={(event) => setSalaryForm({ ...salaryForm, employeeAddress: event.target.value })}
+                      />
+                    </Field>
                     <Field label="Periode">
                       <input
                         className="input"
@@ -2072,6 +2116,9 @@ export default function Home() {
                           <td className="py-3 pr-3">{getSalaryMonthLabel(salary.period)}</td>
                           <td className="py-3 pr-3">
                             <strong>{salary.employeeName}</strong>
+                            <span className="mt-1 block text-xs text-[var(--muted)]">
+                              {salary.employeeBirthDate || "Geen geboortedatum"} · {salary.employeeAddress || "Geen adres"}
+                            </span>
                             <span className="mt-1 block text-xs text-[var(--muted)]">
                               Betaaldatum {salary.paymentDate || "-"}
                             </span>
@@ -2457,6 +2504,9 @@ export default function Home() {
                 </Field>
                 <Field label="Btw-nummer">
                   <input className="input" value={active.vatNumber} onChange={(event) => updateSettings("vatNumber", event.target.value)} />
+                </Field>
+                <Field label="Loonheffingennummer">
+                  <input className="input" value={active.wageTaxNumber ?? ""} onChange={(event) => updateSettings("wageTaxNumber", event.target.value)} />
                 </Field>
                 <Field label="Boekjaar">
                   <input className="input" type="number" value={active.fiscalYear} onChange={(event) => updateSettings("fiscalYear", Number(event.target.value))} />

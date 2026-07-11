@@ -29,6 +29,8 @@ type Contact = {
 type SalaryRecord = {
   id: string;
   employeeName: string;
+  employeeBirthDate?: string;
+  employeeAddress?: string;
   period: string;
   grossSalary: number;
   wageTax: number;
@@ -54,6 +56,7 @@ type Administration = {
   owner: string;
   kvk: string;
   vatNumber: string;
+  wageTaxNumber?: string;
   fiscalYear: number;
   iban: string;
   entries: Entry[];
