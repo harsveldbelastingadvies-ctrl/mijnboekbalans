@@ -110,6 +110,7 @@ type WorkspaceResponse = {
 };
 
 type ProfitLossStatement = ReturnType<typeof buildProfitLossStatement>;
+type VatOverview = ReturnType<typeof buildVatOverview>;
 
 const storageKey = "boekbalans-administraties-v1";
 
@@ -444,6 +445,68 @@ function buildProfitLossStatement(entries: Entry[], vatDeductionPercent = 100) {
     depreciation: summary.annualDepreciation,
     profitBeforeDepreciation,
     profitAfterDepreciation,
+  };
+}
+
+function buildVatOverview(entries: Entry[], vatDeductionPercent = 100) {
+  const inputVatDeductionFactor = clampPercent(vatDeductionPercent) / 100;
+
+  const sortByRate = (a: { vatRate: number }, b: { vatRate: number }) => b.vatRate - a.vatRate;
+  const groupByVatRate = (
+    type: EntryType,
+    mapAmounts: (entry: Entry) => { basis: number; vat: number; deductibleVat?: number },
+  ) => {
+    const grouped = new Map<number, { vatRate: number; basis: number; vat: number; deductibleVat: number }>();
+    entries
+      .filter((entry) => entry.type === type)
+      .forEach((entry) => {
+        const amounts = mapAmounts(entry);
+        const current = grouped.get(entry.vatRate) ?? {
+          vatRate: entry.vatRate,
+          basis: 0,
+          vat: 0,
+          deductibleVat: 0,
+        };
+        current.basis += amounts.basis;
+        current.vat += amounts.vat;
+        current.deductibleVat += amounts.deductibleVat ?? amounts.vat;
+        grouped.set(entry.vatRate, current);
+      });
+
+    return Array.from(grouped.values()).sort(sortByRate);
+  };
+
+  const salesLines = groupByVatRate("income", (entry) => ({
+    basis: entry.amount,
+    vat: entry.amount * (entry.vatRate / 100),
+  }));
+  const inputVatLines = groupByVatRate("expense", (entry) => {
+    const vat = entry.amount * (entry.vatRate / 100);
+    return {
+      basis: entry.amount,
+      vat,
+      deductibleVat: vat * inputVatDeductionFactor,
+    };
+  });
+  const salesBasisTotal = salesLines.reduce((total, line) => total + line.basis, 0);
+  const salesVatTotal = salesLines.reduce((total, line) => total + line.vat, 0);
+  const inputBasisTotal = inputVatLines.reduce((total, line) => total + line.basis, 0);
+  const inputVatTotal = inputVatLines.reduce((total, line) => total + line.vat, 0);
+  const deductibleInputVatTotal = inputVatLines.reduce((total, line) => total + line.deductibleVat, 0);
+  const nonDeductibleInputVatTotal = inputVatTotal - deductibleInputVatTotal;
+  const vatBalance = salesVatTotal - deductibleInputVatTotal;
+
+  return {
+    salesLines,
+    inputVatLines,
+    salesBasisTotal,
+    salesVatTotal,
+    inputBasisTotal,
+    inputVatTotal,
+    deductibleInputVatTotal,
+    nonDeductibleInputVatTotal,
+    vatBalance,
+    vatDeductionPercent: clampPercent(vatDeductionPercent),
   };
 }
 
@@ -1024,6 +1087,60 @@ function buildProfitLossPdf(admin: Administration, statement: ProfitLossStatemen
   ]);
 }
 
+function buildVatOverviewPdf(admin: Administration, overview: VatOverview, periodLabel: string) {
+  return buildTablePdf(admin, "Btw-overzicht", periodLabel, [
+    {
+      title: "Omzet en verschuldigde omzetbelasting",
+      headers: ["Btw-tarief", "Grondslag", "Verschuldigde btw"],
+      widths: [125, 190, 196],
+      rows: [
+        ...overview.salesLines.map((line) => [
+          `${line.vatRate}%`,
+          money.format(line.basis),
+          money.format(line.vat),
+        ]),
+        ["Totaal", money.format(overview.salesBasisTotal), money.format(overview.salesVatTotal)],
+      ],
+      emptyText: "Nog geen omzet in deze periode.",
+    },
+    {
+      title: "Voorbelasting",
+      headers: ["Btw-tarief", "Grondslag kosten", "Betaalde btw", "Aftrekbare voorbelasting"],
+      widths: [80, 135, 135, 161],
+      rows: [
+        ...overview.inputVatLines.map((line) => [
+          `${line.vatRate}%`,
+          money.format(line.basis),
+          money.format(line.vat),
+          money.format(line.deductibleVat),
+        ]),
+        [
+          "Totaal",
+          money.format(overview.inputBasisTotal),
+          money.format(overview.inputVatTotal),
+          money.format(overview.deductibleInputVatTotal),
+        ],
+      ],
+      emptyText: "Nog geen kosten met voorbelasting in deze periode.",
+    },
+    {
+      title: "Saldo btw",
+      headers: ["Onderdeel", "Bedrag"],
+      widths: [340, 171],
+      rows: [
+        ["Verschuldigde omzetbelasting", money.format(overview.salesVatTotal)],
+        ["Aftrekbare voorbelasting", money.format(overview.deductibleInputVatTotal)],
+        ["Niet-aftrekbare voorbelasting", money.format(overview.nonDeductibleInputVatTotal)],
+        ["Aftrekpercentage voorbelasting", `${overview.vatDeductionPercent.toFixed(2)}%`],
+        [
+          overview.vatBalance >= 0 ? "Btw te betalen" : "Btw terug te vragen",
+          money.format(Math.abs(overview.vatBalance)),
+        ],
+      ],
+    },
+  ]);
+}
+
 function buildEntriesPdf(admin: Administration, entries: Entry[], periodLabel: string) {
   return buildTablePdf(admin, "Boekingen", periodLabel, [
     {
@@ -1311,6 +1428,10 @@ export default function Home() {
   );
   const profitLossStatement = useMemo(
     () => buildProfitLossStatement(filteredEntries, vatDeductionPercent),
+    [filteredEntries, vatDeductionPercent],
+  );
+  const vatOverview = useMemo(
+    () => buildVatOverview(filteredEntries, vatDeductionPercent),
     [filteredEntries, vatDeductionPercent],
   );
   const profit = summary.revenue - summary.costs;
@@ -1831,6 +1952,13 @@ export default function Home() {
     downloadBlob(
       `${periodFileBase}-winst-en-verliesrekening.pdf`,
       buildProfitLossPdf(active, profitLossStatement, periodLabel),
+    );
+  };
+
+  const downloadVatOverview = () => {
+    downloadBlob(
+      `${periodFileBase}-btw-overzicht.pdf`,
+      buildVatOverviewPdf(active, vatOverview, periodLabel),
     );
   };
 
@@ -2702,6 +2830,12 @@ export default function Home() {
                 text="Opbrengsten, kosten, afschrijvingen en resultaat voor de gekozen periode."
                 button="Download PDF"
                 onClick={downloadProfitLoss}
+              />
+              <DownloadCard
+                title="Btw-overzicht"
+                text="Grondslag, verschuldigde omzetbelasting, voorbelasting en saldo btw."
+                button="Download PDF"
+                onClick={downloadVatOverview}
               />
               <DownloadCard
                 title="PDF-rapport"
