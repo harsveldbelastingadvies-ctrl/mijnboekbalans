@@ -15,6 +15,7 @@ type EntryStatus = "paid" | "open";
 type TabKey =
   | "overview"
   | "entries"
+  | "invoices"
   | "payroll"
   | "checks"
   | "reports"
@@ -75,6 +76,27 @@ type VatDeductionSettings = {
   taxableTurnover: number;
   exemptTurnover: number;
   manualPercent?: number;
+};
+
+type InvoiceDraft = {
+  id: string;
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  createdAt: string;
+  source: "slim gelezen" | "handmatig";
+  confidence: number;
+  note: string;
+  invoiceNumber: string;
+  date: string;
+  description: string;
+  relation: string;
+  type: EntryType;
+  category: string;
+  amount: string;
+  vatRate: string;
+  status: EntryStatus;
+  selected: boolean;
 };
 
 type Administration = {
@@ -283,6 +305,133 @@ const emptyPayrollEmployee = {
   houseAddition: "",
   address: "",
 };
+
+function normalizeSearchText(value: string) {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function parseDecimal(value: string) {
+  const normalized = value
+    .replace(/\s/g, "")
+    .replace(/\.(?=\d{3}(?:[,.]|$))/g, "")
+    .replace(",", ".");
+  const number = Number(normalized);
+  return Number.isFinite(number) ? number : null;
+}
+
+function formatDecimalInput(value: number) {
+  return value.toFixed(2).replace(".", ",");
+}
+
+function findDateCandidate(source: string) {
+  const iso = source.match(/\b(20\d{2})[-_/ .](0?[1-9]|1[0-2])[-_/ .](0?[1-9]|[12]\d|3[01])\b/);
+  if (iso) {
+    return `${iso[1]}-${iso[2].padStart(2, "0")}-${iso[3].padStart(2, "0")}`;
+  }
+
+  const dutch = source.match(/\b(0?[1-9]|[12]\d|3[01])[-_/ .](0?[1-9]|1[0-2])[-_/ .](20\d{2})\b/);
+  if (dutch) {
+    return `${dutch[3]}-${dutch[2].padStart(2, "0")}-${dutch[1].padStart(2, "0")}`;
+  }
+
+  return today;
+}
+
+function findInvoiceNumber(source: string) {
+  const match = source.match(/(?:factuur(?:nummer)?|invoice|inv|nr\.?)\s*[:#-]?\s*([a-z0-9-]{3,})/i);
+  return match?.[1]?.toUpperCase() ?? "";
+}
+
+function findVatRate(source: string) {
+  const normalized = source.toLowerCase();
+  if (normalized.includes("btw verlegd") || normalized.includes("vrijgesteld")) return "0";
+  const rate = source.match(/\b(21|9|0)\s*%/);
+  return rate?.[1] ?? "21";
+}
+
+function findAmountCandidate(source: string, vatRate: string) {
+  const lines = source.split(/\n| {2,}/).map((line) => line.trim()).filter(Boolean);
+  const labeledLine = lines.find((line) =>
+    /(totaal|te betalen|factuurbedrag|bedrag excl|subtotaal|amount due|total)/i.test(line) &&
+    /\d+[,.]\d{2}/.test(line),
+  );
+  const candidateSource = labeledLine || source;
+  const matches = Array.from(candidateSource.matchAll(/(?:eur|€)?\s*(\d{1,3}(?:[.\s]\d{3})*[,.]\d{2}|\d+[,.]\d{2})/gi));
+  const amounts = matches
+    .map((match) => parseDecimal(match[1]))
+    .filter((amount): amount is number => amount !== null && amount > 0);
+  if (!amounts.length) return "";
+
+  const largestAmount = Math.max(...amounts);
+  const rate = Number(vatRate);
+  const hasInclusiveHint = /(incl\.?\s*btw|te betalen|totaal|amount due|total)/i.test(candidateSource);
+  const hasExclusiveHint = /(excl\.?\s*btw|subtotaal|grondslag)/i.test(candidateSource);
+  const exclusiveAmount =
+    hasInclusiveHint && !hasExclusiveHint && rate > 0
+      ? largestAmount / (1 + rate / 100)
+      : largestAmount;
+
+  return formatDecimalInput(exclusiveAmount);
+}
+
+function inferInvoiceType(source: string, fileName: string): EntryType {
+  const normalized = normalizeSearchText(`${fileName} ${source}`);
+  if (/\b(verkoop|sales|debiteur|outgoing|omzet|inkomsten)\b/.test(normalized)) return "income";
+  if (/\b(inkoop|purchase|supplier|leverancier|bon|receipt|kosten|uitgaven)\b/.test(normalized)) return "expense";
+  return "expense";
+}
+
+function inferRelation(source: string, contacts: Contact[]) {
+  const normalized = normalizeSearchText(source);
+  const match = contacts.find((contact) => normalized.includes(normalizeSearchText(contact.name)));
+  return match?.name ?? "";
+}
+
+function buildInvoiceDraft(file: File, sourceText: string, contacts: Contact[]): InvoiceDraft {
+  const source = `${file.name}\n${sourceText}`;
+  const type = inferInvoiceType(sourceText, file.name);
+  const vatRate = findVatRate(source);
+  const relation = inferRelation(source, contacts);
+  const amount = findAmountCandidate(source, vatRate);
+  const invoiceNumber = findInvoiceNumber(source);
+  const confidenceParts = [
+    amount ? 24 : 0,
+    relation ? 22 : 0,
+    invoiceNumber ? 14 : 0,
+    sourceText.trim().length > 80 ? 18 : 0,
+    findDateCandidate(source) !== today ? 12 : 0,
+    vatRate ? 10 : 0,
+  ];
+  const confidence = Math.min(92, 22 + confidenceParts.reduce((total, value) => total + value, 0));
+
+  return {
+    id: uid(),
+    fileName: file.name,
+    fileType: file.type || "Onbekend bestandstype",
+    fileSize: file.size,
+    createdAt: new Date().toISOString(),
+    source: sourceText.trim() ? "slim gelezen" : "handmatig",
+    confidence,
+    note: sourceText.trim()
+      ? "Controleer de voorgestelde velden voordat je boekt."
+      : "Dit bestand bevatte geen direct leesbare tekst. Vul de ontbrekende velden aan.",
+    invoiceNumber,
+    date: findDateCandidate(source),
+    description: invoiceNumber ? `Factuur ${invoiceNumber}` : file.name.replace(/\.[^.]+$/, ""),
+    relation,
+    type,
+    category: entryCategories[type][0],
+    amount,
+    vatRate,
+    status: type === "income" ? "open" : "paid",
+    selected: true,
+  };
+}
 
 const emptyVatDeduction: VatDeductionSettings = {
   enabled: false,
@@ -1290,6 +1439,8 @@ export default function Home() {
   const [adminName, setAdminName] = useState("");
   const [entryForm, setEntryForm] = useState(emptyEntry);
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
+  const [invoiceDrafts, setInvoiceDrafts] = useState<InvoiceDraft[]>([]);
+  const [invoiceImportStatus, setInvoiceImportStatus] = useState("");
   const [contactForm, setContactForm] = useState(emptyContact);
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
   const [salaryForm, setSalaryForm] = useState(emptySalary);
@@ -1484,6 +1635,11 @@ export default function Home() {
     unknownRelationEntries.length +
     zeroVatEntries.length +
     salaryTotals.openCount;
+  const selectedInvoiceDrafts = invoiceDrafts.filter((draft) => draft.selected);
+  const bookableInvoiceDrafts = selectedInvoiceDrafts.filter((draft) => {
+    const amount = Number(draft.amount.toString().replace(",", "."));
+    return draft.description.trim() && Number.isFinite(amount) && amount > 0;
+  });
 
   const updateActive = (next: Administration) => {
     setAdministrations((items) =>
@@ -1551,6 +1707,94 @@ export default function Home() {
     });
     setEntryForm({ ...emptyEntry, date: entryForm.date });
     setEditingEntryId(null);
+  };
+
+  const readInvoiceFileText = async (file: File) => {
+    try {
+      const rawText = await file.text();
+      const readable = rawText
+        .replace(/[^\x09\x0A\x0D\x20-\x7E\u00A0-\u024F]/g, " ")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+      const letterCount = (readable.match(/[a-zA-ZÀ-ž]/g) ?? []).length;
+      if (readable.length < 30 || letterCount < 12) return "";
+      return readable.slice(0, 20000);
+    } catch {
+      return "";
+    }
+  };
+
+  const importInvoiceFiles = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (!files.length) return;
+
+    setInvoiceImportStatus(`${files.length} bestand(en) lezen...`);
+    const drafts = await Promise.all(
+      files.map(async (file) =>
+        buildInvoiceDraft(file, await readInvoiceFileText(file), active.contacts),
+      ),
+    );
+
+    setInvoiceDrafts((items) => [...drafts, ...items]);
+    setInvoiceImportStatus(`${drafts.length} conceptfactuur/facturen toegevoegd. Controleer de voorstellen.`);
+  };
+
+  const updateInvoiceDraft = (
+    draftId: string,
+    field: keyof InvoiceDraft,
+    value: string | boolean,
+  ) => {
+    setInvoiceDrafts((items) =>
+      items.map((draft) => {
+        if (draft.id !== draftId) return draft;
+        const next = { ...draft, [field]: value };
+        if (field === "type") {
+          const type = value as EntryType;
+          next.category = entryCategories[type][0];
+          next.status = type === "income" ? "open" : "paid";
+        }
+        return next;
+      }),
+    );
+  };
+
+  const removeInvoiceDraft = (draftId: string) => {
+    setInvoiceDrafts((items) => items.filter((draft) => draft.id !== draftId));
+  };
+
+  const clearInvoiceDrafts = () => {
+    setInvoiceDrafts([]);
+    setInvoiceImportStatus("Werkvoorraad geleegd.");
+  };
+
+  const bookInvoiceDrafts = () => {
+    if (!bookableInvoiceDrafts.length) {
+      setInvoiceImportStatus("Geen complete geselecteerde facturen om te boeken.");
+      return;
+    }
+
+    const entries: Entry[] = bookableInvoiceDrafts.map((draft) => ({
+      id: uid(),
+      date: draft.date || today,
+      description: draft.description.trim(),
+      relation: draft.relation.trim() || "Onbekende relatie",
+      category: draft.category || entryCategories[draft.type][0],
+      type: draft.type,
+      amount: Number(draft.amount.toString().replace(",", ".")),
+      vatRate: Number(draft.vatRate),
+      status: draft.status,
+    }));
+
+    updateActive({
+      ...active,
+      entries: [...entries, ...active.entries],
+    });
+    setInvoiceDrafts((items) =>
+      items.filter((draft) => !bookableInvoiceDrafts.some((booked) => booked.id === draft.id)),
+    );
+    setInvoiceImportStatus(`${entries.length} factuur/facturen geboekt.`);
+    setTab("entries");
   };
 
   const saveContact = (event: FormEvent<HTMLFormElement>) => {
@@ -2159,6 +2403,7 @@ export default function Home() {
             {[
               ["overview", "Dashboard"],
               ["entries", "Boekingen"],
+              ["invoices", "Facturen"],
               ["payroll", "Salarissen"],
               ["checks", checkCount ? `Controle (${checkCount})` : "Controle"],
               ["reports", "Downloads"],
@@ -2388,6 +2633,21 @@ export default function Home() {
                 periodLabel={periodLabel}
               />
             </div>
+          )}
+
+          {tab === "invoices" && (
+            <InvoiceImportPanel
+              bookableCount={bookableInvoiceDrafts.length}
+              contacts={active.contacts}
+              drafts={invoiceDrafts}
+              importStatus={invoiceImportStatus}
+              onBookSelected={bookInvoiceDrafts}
+              onClear={clearInvoiceDrafts}
+              onImport={importInvoiceFiles}
+              onRemove={removeInvoiceDraft}
+              onUpdate={updateInvoiceDraft}
+              selectedCount={selectedInvoiceDrafts.length}
+            />
           )}
 
           {tab === "payroll" && (
@@ -3611,5 +3871,227 @@ function EntryTable({
         {!entries.length && <p className="py-6 text-sm text-[var(--muted)]">Nog geen boekingen.</p>}
       </div>
     </section>
+  );
+}
+
+function InvoiceImportPanel({
+  bookableCount,
+  contacts,
+  drafts,
+  importStatus,
+  onBookSelected,
+  onClear,
+  onImport,
+  onRemove,
+  onUpdate,
+  selectedCount,
+}: {
+  bookableCount: number;
+  contacts: Contact[];
+  drafts: InvoiceDraft[];
+  importStatus: string;
+  onBookSelected: () => void;
+  onClear: () => void;
+  onImport: (event: ChangeEvent<HTMLInputElement>) => void;
+  onRemove: (draftId: string) => void;
+  onUpdate: (draftId: string, field: keyof InvoiceDraft, value: string | boolean) => void;
+  selectedCount: number;
+}) {
+  const relationListId = "invoice-relations";
+
+  return (
+    <div className="mt-6 grid gap-5">
+      <section className="panel invoice-upload-panel">
+        <div className="section-title">
+          <div>
+            <p className="eyebrow">Facturen verwerken</p>
+            <h3>Meerdere facturen uploaden</h3>
+            <p className="mt-1 max-w-2xl text-sm leading-6 text-[var(--muted)]">
+              Upload verkoopfacturen, inkoopfacturen, bonnen of UBL-bestanden. BoekBalans maakt
+              conceptboekingen die je eerst controleert.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <label className="primary-button">
+              Kies bestanden
+              <input
+                className="sr-only"
+                multiple
+                onChange={onImport}
+                type="file"
+                accept="application/pdf,image/*,.xml,.ubl,.csv,.txt"
+              />
+            </label>
+            <button className="secondary-button" onClick={onBookSelected} type="button">
+              Boek selectie
+            </button>
+            {drafts.length ? (
+              <button className="ghost-button" onClick={onClear} type="button">
+                Leeg lijst
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          <Metric label="Conceptfacturen" value={String(drafts.length)} accent="teal" />
+          <Metric label="Geselecteerd" value={String(selectedCount)} accent="blue" />
+          <Metric label="Boekbaar" value={String(bookableCount)} accent="yellow" />
+        </div>
+
+        <div className="mt-4 rounded-lg border border-[var(--line)] bg-white p-4">
+          <p className="text-sm font-semibold">Slim inlezen</p>
+          <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+            De tool leest nu alvast bestandsnamen en direct leesbare tekst. Voor gescande PDF&apos;s en
+            foto&apos;s is straks echte AI-herkenning nodig; de controlewerkstroom staat daar al klaar voor.
+          </p>
+          {importStatus ? (
+            <p className="mt-2 text-sm font-semibold text-[var(--teal)]">{importStatus}</p>
+          ) : null}
+        </div>
+      </section>
+
+      <datalist id={relationListId}>
+        {contacts.map((contact) => (
+          <option key={contact.id} value={contact.name}>
+            {contact.type === "customer" ? "Klant" : contact.type === "supplier" ? "Leverancier" : "Ondernemer"}
+            {contact.kvk ? ` · KvK ${contact.kvk}` : ""}
+          </option>
+        ))}
+      </datalist>
+
+      <section className="grid gap-4">
+        {drafts.map((draft) => {
+          const amount = Number(draft.amount.toString().replace(",", "."));
+          const isBookable = draft.description.trim() && Number.isFinite(amount) && amount > 0;
+
+          return (
+            <article className="invoice-draft-card" key={draft.id}>
+              <div className="invoice-draft-header">
+                <label className="toggle-line compact-toggle">
+                  <input
+                    checked={draft.selected}
+                    onChange={(event) => onUpdate(draft.id, "selected", event.target.checked)}
+                    type="checkbox"
+                  />
+                  <span>Meenemen</span>
+                </label>
+                <div className="min-w-0">
+                  <h4>{draft.fileName}</h4>
+                  <p>
+                    {draft.source} · zekerheid {draft.confidence}% · {(draft.fileSize / 1024).toFixed(0)} KB
+                  </p>
+                </div>
+                <span className={`status-pill ${isBookable ? "" : "warning-pill"}`}>
+                  {isBookable ? "Boekbaar" : "Aanvullen"}
+                </span>
+              </div>
+
+              <div className="invoice-form-grid">
+                <Field label="Soort">
+                  <select
+                    className="input"
+                    value={draft.type}
+                    onChange={(event) => onUpdate(draft.id, "type", event.target.value as EntryType)}
+                  >
+                    <option value="income">Verkoopfactuur</option>
+                    <option value="expense">Inkoopfactuur</option>
+                  </select>
+                </Field>
+                <Field label="Datum">
+                  <input
+                    className="input"
+                    type="date"
+                    value={draft.date}
+                    onChange={(event) => onUpdate(draft.id, "date", event.target.value)}
+                  />
+                </Field>
+                <Field label="Factuurnummer">
+                  <input
+                    className="input"
+                    value={draft.invoiceNumber}
+                    onChange={(event) => onUpdate(draft.id, "invoiceNumber", event.target.value)}
+                  />
+                </Field>
+                <Field label="Relatie">
+                  <input
+                    className="input"
+                    list={relationListId}
+                    placeholder="Kies of typ een relatie"
+                    value={draft.relation}
+                    onChange={(event) => onUpdate(draft.id, "relation", event.target.value)}
+                  />
+                </Field>
+                <Field label="Omschrijving">
+                  <input
+                    className="input"
+                    value={draft.description}
+                    onChange={(event) => onUpdate(draft.id, "description", event.target.value)}
+                  />
+                </Field>
+                <Field label="Categorie">
+                  <select
+                    className="input"
+                    value={draft.category}
+                    onChange={(event) => onUpdate(draft.id, "category", event.target.value)}
+                  >
+                    {entryCategories[draft.type].map((category) => (
+                      <option key={category} value={category}>
+                        {category}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Bedrag excl. btw">
+                  <input
+                    className="input"
+                    inputMode="decimal"
+                    value={draft.amount}
+                    onChange={(event) => onUpdate(draft.id, "amount", event.target.value)}
+                  />
+                </Field>
+                <Field label="Btw">
+                  <select
+                    className="input"
+                    value={draft.vatRate}
+                    onChange={(event) => onUpdate(draft.id, "vatRate", event.target.value)}
+                  >
+                    <option value="21">21%</option>
+                    <option value="9">9%</option>
+                    <option value="0">0%</option>
+                  </select>
+                </Field>
+                <Field label="Status">
+                  <select
+                    className="input"
+                    value={draft.status}
+                    onChange={(event) => onUpdate(draft.id, "status", event.target.value as EntryStatus)}
+                  >
+                    <option value="paid">Betaald</option>
+                    <option value="open">Open</option>
+                  </select>
+                </Field>
+              </div>
+
+              <div className="invoice-draft-footer">
+                <p>{draft.note}</p>
+                <button className="ghost-button" onClick={() => onRemove(draft.id)} type="button">
+                  Verwijder
+                </button>
+              </div>
+            </article>
+          );
+        })}
+
+        {!drafts.length ? (
+          <section className="panel">
+            <p className="text-sm text-[var(--muted)]">
+              Nog geen facturen geupload. Kies meerdere bestanden om een werkvoorraad met
+              conceptboekingen te maken.
+            </p>
+          </section>
+        ) : null}
+      </section>
+    </div>
   );
 }

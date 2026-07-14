@@ -341,6 +341,62 @@ select:focus-visible {
   padding: 1rem;
 }
 
+.invoice-upload-panel {
+  background:
+    linear-gradient(90deg, rgba(37, 99, 235, 0.07), transparent 40%),
+    rgba(255, 255, 255, 0.9);
+}
+
+.invoice-draft-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  padding: 1rem;
+  box-shadow: 0 12px 28px rgba(24, 35, 31, 0.05);
+}
+
+.invoice-draft-header,
+.invoice-draft-footer {
+  display: grid;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.invoice-draft-header h4 {
+  overflow-wrap: anywhere;
+  font-weight: 800;
+}
+
+.invoice-draft-header p,
+.invoice-draft-footer p {
+  margin-top: 0.15rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.compact-toggle {
+  width: fit-content;
+  padding: 0.55rem 0.65rem;
+}
+
+.warning-pill {
+  background: var(--yellow-soft);
+  color: #854d0e;
+}
+
+.invoice-form-grid {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.invoice-draft-footer {
+  margin-top: 1rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.85rem;
+}
+
 .section-title {
   display: flex;
   flex-wrap: wrap;
@@ -567,6 +623,14 @@ select:focus-visible {
     grid-template-columns: 1fr auto;
   }
 
+  .invoice-draft-header {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .invoice-draft-footer {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
   .check-action {
     justify-content: flex-end;
   }
@@ -588,6 +652,10 @@ select:focus-visible {
   .vat-tool-grid {
     grid-template-columns: minmax(13rem, 1fr) repeat(3, minmax(9rem, 0.7fr)) minmax(12rem, 0.8fr);
     align-items: end;
+  }
+
+  .invoice-form-grid {
+    grid-template-columns: minmax(10rem, 0.8fr) minmax(9rem, 0.7fr) minmax(10rem, 0.8fr) minmax(14rem, 1fr) minmax(16rem, 1.4fr) minmax(12rem, 1fr) minmax(9rem, 0.75fr) minmax(7rem, 0.55fr) minmax(8rem, 0.65fr);
   }
 }
 
