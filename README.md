@@ -21,6 +21,7 @@ alleen als extra vangnet aanwezig.
 - Werkruimte met pincode om de lokale serveropslag te ontgrendelen.
 - JSON-backup van de actieve administratie en backup terugzetten.
 - Relaties beheren als klant of leverancier, inclusief adres, KvK en selectie bij boekingen.
+- Facturen uploaden als conceptboekingen, met optionele OpenAI-herkenning via een veilige serverkoppeling.
 - Administratiegegevens vastleggen, zoals KvK, btw-nummer, IBAN en boekjaar.
 
 ## Lokaal openen

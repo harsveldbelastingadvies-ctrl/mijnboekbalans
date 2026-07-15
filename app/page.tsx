@@ -84,7 +84,7 @@ type InvoiceDraft = {
   fileType: string;
   fileSize: number;
   createdAt: string;
-  source: "slim gelezen" | "handmatig";
+  source: "AI-herkenning" | "slim gelezen" | "handmatig";
   confidence: number;
   note: string;
   invoiceNumber: string;
@@ -429,6 +429,43 @@ function buildInvoiceDraft(file: File, sourceText: string, contacts: Contact[]):
     amount,
     vatRate,
     status: type === "income" ? "open" : "paid",
+    selected: true,
+  };
+}
+
+type InvoiceAiResult = {
+  invoiceNumber: string;
+  date: string;
+  description: string;
+  relation: string;
+  type: EntryType;
+  category: string;
+  amountExVat: number;
+  vatRate: 0 | 9 | 21;
+  status: EntryStatus;
+  confidence: number;
+  note: string;
+};
+
+function buildAiInvoiceDraft(file: File, result: InvoiceAiResult): InvoiceDraft {
+  return {
+    id: uid(),
+    fileName: file.name,
+    fileType: file.type || "Onbekend bestandstype",
+    fileSize: file.size,
+    createdAt: new Date().toISOString(),
+    source: "AI-herkenning",
+    confidence: Math.min(98, Math.max(0, Math.round(result.confidence))),
+    note: result.note || "AI-voorstel gemaakt. Controleer de velden voordat je boekt.",
+    invoiceNumber: result.invoiceNumber || "",
+    date: result.date || today,
+    description: result.description || (result.invoiceNumber ? `Factuur ${result.invoiceNumber}` : "Factuur"),
+    relation: result.relation || "",
+    type: result.type,
+    category: result.category || entryCategories[result.type][0],
+    amount: result.amountExVat > 0 ? formatDecimalInput(result.amountExVat) : "",
+    vatRate: String(result.vatRate),
+    status: result.status,
     selected: true,
   };
 }
@@ -1724,20 +1761,66 @@ export default function Home() {
     }
   };
 
+  const analyzeInvoiceWithAi = async (file: File) => {
+    const formData = new FormData();
+    formData.set("file", file);
+    formData.set(
+      "contacts",
+      JSON.stringify(
+        active.contacts.map((contact) => ({
+          name: contact.name,
+          type: contact.type,
+          kvk: contact.kvk,
+        })),
+      ),
+    );
+
+    const response = await fetch("/api/invoices/analyze", {
+      method: "POST",
+      body: formData,
+    });
+    const data = (await response.json()) as {
+      result?: InvoiceAiResult;
+      error?: string;
+    };
+
+    if (!response.ok || !data.result) {
+      throw new Error(data.error ?? "AI-herkenning mislukt.");
+    }
+
+    return buildAiInvoiceDraft(file, data.result);
+  };
+
   const importInvoiceFiles = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
     event.target.value = "";
     if (!files.length) return;
 
-    setInvoiceImportStatus(`${files.length} bestand(en) lezen...`);
+    setInvoiceImportStatus(`${files.length} bestand(en) met AI herkennen...`);
+    let aiCount = 0;
+    let fallbackCount = 0;
+    const fallbackMessages = new Set<string>();
     const drafts = await Promise.all(
-      files.map(async (file) =>
-        buildInvoiceDraft(file, await readInvoiceFileText(file), active.contacts),
-      ),
+      files.map(async (file) => {
+        try {
+          const draft = await analyzeInvoiceWithAi(file);
+          aiCount += 1;
+          return draft;
+        } catch (error) {
+          fallbackCount += 1;
+          if (error instanceof Error) fallbackMessages.add(error.message);
+          return buildInvoiceDraft(file, await readInvoiceFileText(file), active.contacts);
+        }
+      }),
     );
 
     setInvoiceDrafts((items) => [...drafts, ...items]);
-    setInvoiceImportStatus(`${drafts.length} conceptfactuur/facturen toegevoegd. Controleer de voorstellen.`);
+    const fallbackText = fallbackCount
+      ? ` ${fallbackCount} bestand(en) zijn lokaal voorgesteld${fallbackMessages.size ? `: ${Array.from(fallbackMessages)[0]}` : "."}`
+      : "";
+    setInvoiceImportStatus(
+      `${drafts.length} conceptfactuur/facturen toegevoegd. ${aiCount} via AI.${fallbackText} Controleer de voorstellen.`,
+    );
   };
 
   const updateInvoiceDraft = (
@@ -3942,8 +4025,9 @@ function InvoiceImportPanel({
         <div className="mt-4 rounded-lg border border-[var(--line)] bg-white p-4">
           <p className="text-sm font-semibold">Slim inlezen</p>
           <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
-            De tool leest nu alvast bestandsnamen en direct leesbare tekst. Voor gescande PDF&apos;s en
-            foto&apos;s is straks echte AI-herkenning nodig; de controlewerkstroom staat daar al klaar voor.
+            Met een OpenAI API-sleutel herkent BoekBalans PDF&apos;s, afbeeldingen en UBL/XML-facturen
+            automatisch. Zonder sleutel maakt de app een lokaal voorstel op basis van bestandsnaam en
+            leesbare tekst.
           </p>
           {importStatus ? (
             <p className="mt-2 text-sm font-semibold text-[var(--teal)]">{importStatus}</p>

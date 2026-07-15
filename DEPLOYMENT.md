@@ -56,6 +56,19 @@ CLOUDFLARE_ACCOUNT_ID
 
 De API token moet Workers kunnen deployen en D1 kunnen gebruiken.
 
+Voor AI-herkenning van verkoop- en inkoopfacturen moet daarnaast in Cloudflare
+bij de Worker onder Settings > Variables and secrets deze secret staan:
+
+```text
+OPENAI_API_KEY
+```
+
+Optioneel kun je ook dit instellen om later een ander OpenAI-model te gebruiken:
+
+```text
+OPENAI_INVOICE_MODEL
+```
+
 ## 4. Automatisch publiceren
 
 Na iedere push naar `main` draait GitHub Actions:
