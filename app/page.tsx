@@ -281,6 +281,7 @@ const emptyEntry = {
   category: entryCategories.income[0],
   amount: "",
   vatRate: "21",
+  vatLines: [createInvoiceVatLine(entryCategories.expense[0], "", "21")],
   status: "paid" as EntryStatus,
   depreciationYears: "none",
 };
@@ -1707,7 +1708,13 @@ export default function Home() {
   const administrationFileBase = `${safeFileName(active.name) || "boekbalans"}-${active.fiscalYear}`;
   const periodFileBase = `${administrationFileBase}-${getPeriodFilePart(period)}`;
   const latestEntries = filteredEntries.slice(0, 4);
-  const enteredAmount = Number(entryForm.amount.toString().replace(",", "."));
+  const entryVatLinesTotal = calculateInvoiceVatLineTotal(entryForm.vatLines);
+  const entryUsesSplitVatLines =
+    entryForm.type === "expense" && entryForm.vatLines.length > 1 && !editingEntryId;
+  const enteredAmount =
+    entryUsesSplitVatLines
+      ? entryVatLinesTotal
+      : Number(entryForm.amount.toString().replace(",", "."));
   const relationSuggestions = active.contacts.filter((contact) =>
     entryForm.type === "income"
       ? contact.type === "customer" || contact.type === "entrepreneur"
@@ -1791,13 +1798,99 @@ export default function Home() {
     setAdminName("");
   };
 
+  const addEntryVatLine = () => {
+    setEntryForm({
+      ...entryForm,
+      vatLines: [
+        ...entryForm.vatLines,
+        createInvoiceVatLine(entryForm.category || entryCategories.expense[0], "", "21"),
+      ],
+    });
+  };
+
+  const updateEntryVatLine = (
+    lineId: string,
+    field: keyof InvoiceVatLine,
+    value: string,
+  ) => {
+    const vatLines = entryForm.vatLines.map((line) =>
+      line.id === lineId ? { ...line, [field]: value } : line,
+    );
+    const totalAmount = calculateInvoiceVatLineTotal(vatLines);
+    setEntryForm({
+      ...entryForm,
+      vatLines,
+      amount: totalAmount > 0 ? formatDecimalInput(totalAmount) : entryForm.amount,
+      vatRate: vatLines.length === 1 ? vatLines[0].vatRate : entryForm.vatRate,
+      category: vatLines.length === 1 ? vatLines[0].category : entryForm.category,
+    });
+  };
+
+  const removeEntryVatLine = (lineId: string) => {
+    if (entryForm.vatLines.length <= 1) return;
+    const vatLines = entryForm.vatLines.filter((line) => line.id !== lineId);
+    const totalAmount = calculateInvoiceVatLineTotal(vatLines);
+    setEntryForm({
+      ...entryForm,
+      vatLines,
+      amount: totalAmount > 0 ? formatDecimalInput(totalAmount) : entryForm.amount,
+    });
+  };
+
   const addEntry = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const amount = Number(entryForm.amount.toString().replace(",", "."));
-    if (!entryForm.description.trim() || !Number.isFinite(amount) || amount <= 0) return;
+    const validVatLines = getValidInvoiceVatLines({
+      ...entryForm,
+      id: "entry-form",
+      fileName: "",
+      fileType: "",
+      fileSize: 0,
+      createdAt: "",
+      source: "handmatig",
+      confidence: 0,
+      note: "",
+      invoiceNumber: "",
+      selected: true,
+    });
+    if (
+      !entryForm.description.trim() ||
+      (entryUsesSplitVatLines
+        ? validVatLines.length !== entryForm.vatLines.length
+        : !Number.isFinite(amount) || amount <= 0)
+    ) {
+      return;
+    }
 
     const category =
       entryForm.category.trim() || entryCategories[entryForm.type][0] || "Algemeen";
+
+    if (entryUsesSplitVatLines && !editingEntryId) {
+      const entries: Entry[] = validVatLines.map((line) => ({
+        id: uid(),
+        date: entryForm.date,
+        description: `${entryForm.description.trim()} · ${line.vatRate}% btw`,
+        relation: entryForm.relation.trim() || "Onbekende relatie",
+        category: line.category || category,
+        type: "expense",
+        amount: line.parsedAmount,
+        vatRate: line.parsedVatRate,
+        status: entryForm.status,
+      }));
+
+      updateActive({
+        ...active,
+        entries: [...entries, ...active.entries],
+      });
+      setEntryForm({
+        ...emptyEntry,
+        date: entryForm.date,
+        type: "expense",
+        category: entryCategories.expense[0],
+        vatLines: [createInvoiceVatLine(entryCategories.expense[0], "", "21")],
+      });
+      return;
+    }
 
     const depreciationYears =
       entryForm.type === "expense" &&
@@ -2339,6 +2432,13 @@ export default function Home() {
       category: entry.category,
       amount: String(entry.amount).replace(".", ","),
       vatRate: String(entry.vatRate),
+      vatLines: [
+        createInvoiceVatLine(
+          entry.type === "expense" ? entry.category : entryCategories.expense[0],
+          String(entry.amount).replace(".", ","),
+          String(entry.vatRate),
+        ),
+      ],
       status: entry.status,
       depreciationYears: entry.depreciationYears ? String(entry.depreciationYears) : "none",
     });
@@ -2762,6 +2862,7 @@ export default function Home() {
                           type: "income",
                           category: entryCategories.income[0],
                           relation: "",
+                          vatLines: [createInvoiceVatLine(entryCategories.expense[0], "", "21")],
                           depreciationYears: "none",
                         })
                       }
@@ -2777,6 +2878,7 @@ export default function Home() {
                           type: "expense",
                           category: entryCategories.expense[0],
                           relation: "",
+                          vatLines: [createInvoiceVatLine(entryCategories.expense[0], entryForm.amount, entryForm.vatRate)],
                           depreciationYears: "none",
                         })
                       }
@@ -2818,6 +2920,10 @@ export default function Home() {
                         setEntryForm({
                           ...entryForm,
                           category,
+                          vatLines:
+                            entryForm.vatLines.length === 1
+                              ? [{ ...entryForm.vatLines[0], category }]
+                              : entryForm.vatLines,
                           depreciationYears: category === "Investeringen" ? entryForm.depreciationYears : "none",
                         });
                       }}
@@ -2830,10 +2936,39 @@ export default function Home() {
                     </select>
                   </Field>
                   <Field label="Bedrag excl. btw">
-                    <input className="input" inputMode="decimal" value={entryForm.amount} onChange={(event) => setEntryForm({ ...entryForm, amount: event.target.value })} />
+                    <input
+                      className="input"
+                      inputMode="decimal"
+                      readOnly={entryUsesSplitVatLines}
+                      value={entryUsesSplitVatLines ? formatDecimalInput(entryVatLinesTotal) : entryForm.amount}
+                      onChange={(event) =>
+                        setEntryForm({
+                          ...entryForm,
+                          amount: event.target.value,
+                          vatLines:
+                            entryForm.vatLines.length === 1
+                              ? [{ ...entryForm.vatLines[0], amount: event.target.value }]
+                              : entryForm.vatLines,
+                        })
+                      }
+                    />
                   </Field>
                   <Field label="Btw">
-                    <select className="input" value={entryForm.vatRate} onChange={(event) => setEntryForm({ ...entryForm, vatRate: event.target.value })}>
+                    <select
+                      className="input"
+                      disabled={entryUsesSplitVatLines}
+                      value={entryForm.vatRate}
+                      onChange={(event) =>
+                        setEntryForm({
+                          ...entryForm,
+                          vatRate: event.target.value,
+                          vatLines:
+                            entryForm.vatLines.length === 1
+                              ? [{ ...entryForm.vatLines[0], vatRate: event.target.value }]
+                              : entryForm.vatLines,
+                        })
+                      }
+                    >
                       <option value="21">21%</option>
                       <option value="9">9%</option>
                       <option value="0">0%</option>
@@ -2846,6 +2981,84 @@ export default function Home() {
                     </select>
                   </Field>
                   </div>
+                  {entryForm.type === "expense" ? (
+                    <div className="entry-vat-lines">
+                      <div className="section-title">
+                        <div>
+                          <p className="eyebrow">Btw-regels uitgave</p>
+                          <h4>Splits de uitgave per btw-percentage</h4>
+                        </div>
+                        <button
+                          className="secondary-button"
+                          disabled={Boolean(editingEntryId)}
+                          onClick={addEntryVatLine}
+                          type="button"
+                        >
+                          Regel toevoegen
+                        </button>
+                      </div>
+                      <div className="mt-3 grid gap-2">
+                        {entryForm.vatLines.map((line, index) => (
+                          <div className="invoice-vat-line" key={line.id}>
+                            <Field label={`Regel ${index + 1}`}>
+                              <select
+                                className="input"
+                                value={line.category}
+                                onChange={(event) =>
+                                  updateEntryVatLine(line.id, "category", event.target.value)
+                                }
+                              >
+                                {entryCategories.expense.map((category) => (
+                                  <option key={category} value={category}>
+                                    {category}
+                                  </option>
+                                ))}
+                              </select>
+                            </Field>
+                            <Field label="Bedrag excl. btw">
+                              <input
+                                className="input"
+                                inputMode="decimal"
+                                value={line.amount}
+                                onChange={(event) =>
+                                  updateEntryVatLine(line.id, "amount", event.target.value)
+                                }
+                              />
+                            </Field>
+                            <Field label="Btw">
+                              <select
+                                className="input"
+                                value={line.vatRate}
+                                onChange={(event) =>
+                                  updateEntryVatLine(line.id, "vatRate", event.target.value)
+                                }
+                              >
+                                <option value="21">21%</option>
+                                <option value="9">9%</option>
+                                <option value="0">0%</option>
+                              </select>
+                            </Field>
+                            <button
+                              className="ghost-button"
+                              disabled={entryForm.vatLines.length <= 1}
+                              onClick={() => removeEntryVatLine(line.id)}
+                              type="button"
+                            >
+                              Verwijder
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="mt-3 text-sm font-semibold text-[var(--muted)]">
+                        Totaal grondslag uit btw-regels: {money.format(entryVatLinesTotal)}
+                      </p>
+                      {editingEntryId ? (
+                        <p className="mt-1 text-xs font-medium text-[var(--muted)]">
+                          Splitsen kan bij een nieuwe uitgave. Een bestaande boeking bewerken blijft één regel.
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {showDepreciation && (
                     <Field label="Afschrijving">
                       <select
