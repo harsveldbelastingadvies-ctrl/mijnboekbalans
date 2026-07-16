@@ -5,8 +5,14 @@
   "compatibility_date": "2026-07-05",
   "compatibility_flags": [
     "nodejs_compat",
+    "nodejs_compat_populate_process_env",
     "global_fetch_strictly_public"
   ],
+  "secrets": {
+    "required": [
+      "OPENAI_API_KEY"
+    ]
+  },
   "assets": {
     "directory": ".open-next/assets",
     "binding": "ASSETS"
