@@ -193,6 +193,7 @@ export async function POST(request: NextRequest) {
   const formData = await request.formData();
   const file = formData.get("file");
   const contacts = String(formData.get("contacts") ?? "[]").slice(0, 12000);
+  const administration = String(formData.get("administration") ?? "{}").slice(0, 4000);
 
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "Geen factuurbestand ontvangen." }, { status: 400 });
@@ -221,12 +222,14 @@ export async function POST(request: NextRequest) {
     "Gebruik NOOIT het totaal inclusief btw als amountExVat. Als alleen inclusief btw zichtbaar is, reken amountExVat terug met het gekozen btw-tarief.",
     "Bij een verkoopfactuur is relation de klant/afnemer aan wie is gefactureerd, niet de afzender/leverancier van de factuur.",
     "Bij een inkoopfactuur of bon is relation de leverancier.",
+    "Bepaal verkoop versus inkoop vanuit de eigen administratie hieronder. Als de afzender overeenkomt met de eigen administratie, is het een verkoopfactuur.",
     "Kies type 'income' voor verkoopfacturen en 'expense' voor inkoopfacturen of bonnetjes.",
     "Kies category bij income uit: Omzet diensten, Omzet producten, Abonnementen, Overige inkomsten.",
     "Kies category bij expense uit: Inkoop, Uitbesteed werk, Investeringen, Software, Kantoorkosten, Auto- en transportkosten, Huisvestingskosten, Reiskosten, Marketing, Administratiekosten, Bankkosten, Representatiekosten, Telefoonkosten, Verzekeringen, Overige kosten.",
     "Vul vatLines altijd met de grondslag exclusief btw per btw-percentage. Ook bij verkoopfacturen moet er minimaal één vatLine zijn.",
     "De som van vatLines.amountExVat moet aansluiten op amountExVat.",
     "Gebruik status 'open' voor verkoopfacturen, tenzij betaling duidelijk zichtbaar is. Gebruik bij kosten standaard 'paid', tenzij openstaand duidelijk zichtbaar is.",
+    `Eigen administratie: ${administration}`,
     `Bekende relaties uit deze administratie: ${contacts}`,
   ].join("\n");
 

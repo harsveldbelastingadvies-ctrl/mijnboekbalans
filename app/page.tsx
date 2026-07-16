@@ -359,7 +359,9 @@ function findDateCandidate(source: string) {
 }
 
 function findInvoiceNumber(source: string) {
-  const match = source.match(/(?:factuur(?:nummer)?|invoice|inv|nr\.?)\s*[:#-]?\s*([a-z0-9-]{3,})/i);
+  const match =
+    source.match(/(?:factuur(?:nummer)?|invoice|inv|nr\.?)\s*[:#-]?\s*([a-z0-9-]{3,})/i) ??
+    source.match(/\bfactuur\s+([0-9]{4}[-/][0-9]{3,})\b/i);
   return match?.[1]?.toUpperCase() ?? "";
 }
 
@@ -372,10 +374,16 @@ function findVatRate(source: string) {
 
 function findAmountCandidate(source: string, vatRate: string) {
   const lines = source.split(/\n| {2,}/).map((line) => line.trim()).filter(Boolean);
-  const labeledLine = lines.find((line) =>
-    /(totaal|te betalen|factuurbedrag|bedrag excl|subtotaal|amount due|total)/i.test(line) &&
+  const exactExVatLine = lines.find((line) =>
+    /(subtotaal|bedrag\s+excl|excl\.?\s*btw|grondslag|netto|subtotal)/i.test(line) &&
+    !/(btw|vat)\s*€?\s*\d+[,.]\d{2}/i.test(line) &&
     /\d+[,.]\d{2}/.test(line),
   );
+  const totalLine = lines.find((line) =>
+    /(totaal|te betalen|factuurbedrag|amount due|total)/i.test(line) &&
+    /\d+[,.]\d{2}/.test(line),
+  );
+  const labeledLine = exactExVatLine || totalLine;
   const candidateSource = labeledLine || source;
   const matches = Array.from(candidateSource.matchAll(/(?:eur|€)?\s*(\d{1,3}(?:[.\s]\d{3})*[,.]\d{2}|\d+[,.]\d{2})/gi));
   const amounts = matches
@@ -1951,11 +1959,13 @@ export default function Home() {
 
   const readInvoiceFileText = async (file: File) => {
     try {
+      if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) return "";
       const rawText = await file.text();
       const readable = rawText
         .replace(/[^\x09\x0A\x0D\x20-\x7E\u00A0-\u024F]/g, " ")
         .replace(/\s{2,}/g, " ")
         .trim();
+      if (readable.startsWith("%PDF-")) return "";
       const letterCount = (readable.match(/[a-zA-ZÀ-ž]/g) ?? []).length;
       if (readable.length < 30 || letterCount < 12) return "";
       return readable.slice(0, 20000);
@@ -1976,6 +1986,15 @@ export default function Home() {
           kvk: contact.kvk,
         })),
       ),
+    );
+    formData.set(
+      "administration",
+      JSON.stringify({
+        name: active.name,
+        owner: active.owner,
+        kvk: active.kvk,
+        vatNumber: active.vatNumber,
+      }),
     );
 
     const response = await fetch("/api/invoices/analyze", {
@@ -2012,7 +2031,20 @@ export default function Home() {
         } catch (error) {
           fallbackCount += 1;
           if (error instanceof Error) fallbackMessages.add(error.message);
-          return buildInvoiceDraft(file, await readInvoiceFileText(file), active.contacts);
+          const sourceText = await readInvoiceFileText(file);
+          const draft = buildInvoiceDraft(file, sourceText, active.contacts);
+          if (!sourceText && (file.type === "application/pdf" || /\.pdf$/i.test(file.name))) {
+            return {
+              ...draft,
+              source: "handmatig" as const,
+              confidence: 0,
+              amount: "",
+              vatLines: [createInvoiceVatLine(draft.category, "", draft.vatRate)],
+              note:
+                "Deze PDF kon zonder AI niet veilig worden gelezen. Vul de velden handmatig in of controleer de OpenAI-sleutel in Cloudflare.",
+            };
+          }
+          return draft;
         }
       }),
     );
