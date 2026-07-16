@@ -172,7 +172,7 @@ export async function POST(request: NextRequest) {
     "Bedragen moeten exclusief btw zijn. Als alleen inclusief btw zichtbaar is, reken dan terug met het gekozen btw-tarief.",
     "Kies type 'income' voor verkoopfacturen en 'expense' voor inkoopfacturen of bonnetjes.",
     "Kies category bij income uit: Omzet diensten, Omzet producten, Abonnementen, Overige inkomsten.",
-    "Kies category bij expense uit: Inkoop, Investeringen, Software, Kantoorkosten, Reiskosten, Marketing, Administratiekosten, Overige kosten.",
+    "Kies category bij expense uit: Inkoop, Uitbesteed werk, Investeringen, Software, Kantoorkosten, Auto- en transportkosten, Huisvestingskosten, Reiskosten, Marketing, Administratiekosten, Bankkosten, Representatiekosten, Telefoonkosten, Verzekeringen, Overige kosten.",
     "Als een inkoopfactuur meerdere btw-percentages of grondslagen heeft, vul vatLines met een aparte regel per btw-percentage.",
     "De som van vatLines.amountExVat moet aansluiten op amountExVat. Gebruik bij verkoopfacturen normaal één vatLine.",
     "Gebruik status 'open' voor verkoopfacturen, tenzij betaling duidelijk zichtbaar is. Gebruik bij kosten standaard 'paid', tenzij openstaand duidelijk zichtbaar is.",
