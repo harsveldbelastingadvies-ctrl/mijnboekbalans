@@ -391,6 +391,29 @@ select:focus-visible {
   margin-top: 1rem;
 }
 
+.invoice-vat-lines {
+  margin-top: 1rem;
+  border: 1px solid rgba(15, 118, 110, 0.16);
+  border-radius: 8px;
+  background: #fbfdfb;
+  padding: 1rem;
+}
+
+.invoice-vat-lines h4 {
+  margin-top: 0.15rem;
+  font-weight: 800;
+}
+
+.invoice-vat-line {
+  display: grid;
+  gap: 0.75rem;
+  align-items: end;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  padding: 0.75rem;
+}
+
 .invoice-draft-footer {
   margin-top: 1rem;
   border-top: 1px solid var(--line);
@@ -629,6 +652,10 @@ select:focus-visible {
 
   .invoice-draft-footer {
     grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .invoice-vat-line {
+    grid-template-columns: minmax(14rem, 1fr) minmax(9rem, 0.75fr) minmax(7rem, 0.45fr) auto;
   }
 
   .check-action {

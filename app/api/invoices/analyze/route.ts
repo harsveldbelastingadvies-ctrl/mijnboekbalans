@@ -12,6 +12,11 @@ type InvoiceAnalysis = {
   category: string;
   amountExVat: number;
   vatRate: 0 | 9 | 21;
+  vatLines: Array<{
+    category: string;
+    amountExVat: number;
+    vatRate: 0 | 9 | 21;
+  }>;
   status: "paid" | "open";
   confidence: number;
   note: string;
@@ -65,6 +70,24 @@ function normalizeAnalysis(value: unknown): InvoiceAnalysis {
   const vatRate = rawVatRate === 9 || rawVatRate === 0 ? rawVatRate : 21;
   const rawAmount = Number(data.amountExVat);
   const confidence = Math.min(98, Math.max(0, Number(data.confidence) || 55));
+  const rawVatLines = Array.isArray(data.vatLines) ? data.vatLines : [];
+  const vatLines = rawVatLines
+    .map((line) => {
+      const record = line && typeof line === "object" ? (line as Record<string, unknown>) : {};
+      const lineVatRate = Number(record.vatRate);
+      const lineAmount = Number(record.amountExVat);
+      return {
+        category:
+          typeof record.category === "string" && record.category.trim()
+            ? record.category.trim()
+            : type === "income"
+              ? "Omzet diensten"
+              : "Inkoop",
+        amountExVat: Number.isFinite(lineAmount) && lineAmount > 0 ? lineAmount : 0,
+        vatRate: (lineVatRate === 9 || lineVatRate === 0 ? lineVatRate : 21) as 0 | 9 | 21,
+      };
+    })
+    .filter((line) => line.amountExVat > 0);
 
   return {
     invoiceNumber: typeof data.invoiceNumber === "string" ? data.invoiceNumber : "",
@@ -86,6 +109,16 @@ function normalizeAnalysis(value: unknown): InvoiceAnalysis {
           : "Inkoop",
     amountExVat: Number.isFinite(rawAmount) && rawAmount > 0 ? rawAmount : 0,
     vatRate,
+    vatLines:
+      vatLines.length > 0
+        ? vatLines
+        : [
+            {
+              category: type === "income" ? "Omzet diensten" : "Inkoop",
+              amountExVat: Number.isFinite(rawAmount) && rawAmount > 0 ? rawAmount : 0,
+              vatRate,
+            },
+          ],
     status: data.status === "open" ? "open" : "paid",
     confidence,
     note:
@@ -140,6 +173,8 @@ export async function POST(request: NextRequest) {
     "Kies type 'income' voor verkoopfacturen en 'expense' voor inkoopfacturen of bonnetjes.",
     "Kies category bij income uit: Omzet diensten, Omzet producten, Abonnementen, Overige inkomsten.",
     "Kies category bij expense uit: Inkoop, Investeringen, Software, Kantoorkosten, Reiskosten, Marketing, Administratiekosten, Overige kosten.",
+    "Als een inkoopfactuur meerdere btw-percentages of grondslagen heeft, vul vatLines met een aparte regel per btw-percentage.",
+    "De som van vatLines.amountExVat moet aansluiten op amountExVat. Gebruik bij verkoopfacturen normaal één vatLine.",
     "Gebruik status 'open' voor verkoopfacturen, tenzij betaling duidelijk zichtbaar is. Gebruik bij kosten standaard 'paid', tenzij openstaand duidelijk zichtbaar is.",
     `Bekende relaties uit deze administratie: ${contacts}`,
   ].join("\n");
@@ -182,6 +217,19 @@ export async function POST(request: NextRequest) {
               category: { type: "string" },
               amountExVat: { type: "number" },
               vatRate: { type: "number", enum: [0, 9, 21] },
+              vatLines: {
+                type: "array",
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    category: { type: "string" },
+                    amountExVat: { type: "number" },
+                    vatRate: { type: "number", enum: [0, 9, 21] },
+                  },
+                  required: ["category", "amountExVat", "vatRate"],
+                },
+              },
               status: { type: "string", enum: ["paid", "open"] },
               confidence: { type: "number" },
               note: { type: "string" },
@@ -195,6 +243,7 @@ export async function POST(request: NextRequest) {
               "category",
               "amountExVat",
               "vatRate",
+              "vatLines",
               "status",
               "confidence",
               "note",
