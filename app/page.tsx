@@ -1722,17 +1722,26 @@ export default function Home() {
     entryUsesSplitVatLines
       ? entryVatLinesTotal
       : Number(entryForm.amount.toString().replace(",", "."));
+  const investmentVatLinesTotal = entryForm.vatLines
+    .filter((line) => line.category === "Investeringen")
+    .reduce((total, line) => {
+      const amount = Number(line.amount.toString().replace(",", "."));
+      return Number.isFinite(amount) ? total + amount : total;
+    }, 0);
   const relationSuggestions = active.contacts.filter((contact) =>
     entryForm.type === "income"
       ? contact.type === "customer" || contact.type === "entrepreneur"
       : contact.type === "supplier" || contact.type === "entrepreneur",
   );
   const relationListId = `relations-${entryForm.type}`;
-  const showDepreciation = entryForm.type === "expense" && entryForm.category === "Investeringen";
+  const showDepreciation =
+    entryForm.type === "expense" &&
+    (entryForm.category === "Investeringen" || investmentVatLinesTotal > 0);
   const canDepreciate =
     showDepreciation &&
-    Number.isFinite(enteredAmount) &&
-    enteredAmount >= 450;
+    (entryUsesSplitVatLines
+      ? investmentVatLinesTotal >= 450
+      : Number.isFinite(enteredAmount) && enteredAmount >= 450);
   const missingSettings = [
     ["Ondernemer", active.owner],
     ["KvK", active.kvk],
@@ -1873,17 +1882,28 @@ export default function Home() {
       entryForm.category.trim() || entryCategories[entryForm.type][0] || "Algemeen";
 
     if (entryUsesSplitVatLines && !editingEntryId) {
-      const entries: Entry[] = validVatLines.map((line) => ({
-        id: uid(),
-        date: entryForm.date,
-        description: `${entryForm.description.trim()} · ${line.vatRate}% btw`,
-        relation: entryForm.relation.trim() || "Onbekende relatie",
-        category: line.category || category,
-        type: "expense",
-        amount: line.parsedAmount,
-        vatRate: line.parsedVatRate,
-        status: entryForm.status,
-      }));
+      const entries: Entry[] = validVatLines.map((line) => {
+        const lineCategory = line.category || category;
+        const lineDepreciationYears =
+          lineCategory === "Investeringen" &&
+          line.parsedAmount >= 450 &&
+          entryForm.depreciationYears !== "none"
+            ? (Number(entryForm.depreciationYears) as 5 | 10)
+            : undefined;
+
+        return {
+          id: uid(),
+          date: entryForm.date,
+          description: `${entryForm.description.trim()} · ${line.vatRate}% btw`,
+          relation: entryForm.relation.trim() || "Onbekende relatie",
+          category: lineCategory,
+          type: "expense",
+          amount: line.parsedAmount,
+          vatRate: line.parsedVatRate,
+          status: entryForm.status,
+          depreciationYears: lineDepreciationYears,
+        };
+      });
 
       updateActive({
         ...active,
