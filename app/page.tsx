@@ -501,6 +501,8 @@ type InvoiceAiResult = {
   type: EntryType;
   category: string;
   amountExVat: number;
+  amountVat?: number;
+  amountInclVat?: number;
   vatRate: 0 | 9 | 21;
   vatLines: InvoiceAiVatLine[];
   status: EntryStatus;
@@ -509,18 +511,15 @@ type InvoiceAiResult = {
 };
 
 function buildAiInvoiceDraft(file: File, result: InvoiceAiResult): InvoiceDraft {
-  const aiVatLines =
-    result.type === "expense"
-      ? result.vatLines
-          .filter((line) => line.amountExVat > 0)
-          .map((line) =>
-            createInvoiceVatLine(
-              line.category || result.category || entryCategories.expense[0],
-              formatDecimalInput(line.amountExVat),
-              String(line.vatRate),
-            ),
-          )
-      : [];
+  const aiVatLines = result.vatLines
+    .filter((line) => line.amountExVat > 0)
+    .map((line) =>
+      createInvoiceVatLine(
+        line.category || result.category || entryCategories[result.type][0],
+        formatDecimalInput(line.amountExVat),
+        String(line.vatRate),
+      ),
+    );
   const totalAmount =
     aiVatLines.length > 0
       ? calculateInvoiceVatLineTotal(aiVatLines)
@@ -1779,7 +1778,7 @@ export default function Home() {
   const bookableInvoiceDrafts = selectedInvoiceDrafts.filter((draft) => {
     const amount = Number(draft.amount.toString().replace(",", "."));
     const validVatLines = getValidInvoiceVatLines(draft);
-    if (draft.type === "expense" && draft.vatLines.length > 1) {
+    if (draft.vatLines.length > 1) {
       return draft.description.trim() && validVatLines.length === draft.vatLines.length;
     }
     return draft.description.trim() && Number.isFinite(amount) && amount > 0;
@@ -2126,7 +2125,7 @@ export default function Home() {
 
     const entries: Entry[] = bookableInvoiceDrafts.flatMap((draft) => {
       const splitLines =
-        draft.type === "expense" && draft.vatLines.length > 1
+        draft.vatLines.length > 1
           ? getValidInvoiceVatLines(draft)
           : [];
 
@@ -2136,7 +2135,7 @@ export default function Home() {
           date: draft.date || today,
           description: `${draft.description.trim()} · ${line.vatRate}% btw`,
           relation: draft.relation.trim() || "Onbekende relatie",
-          category: line.category || draft.category || entryCategories.expense[0],
+          category: line.category || draft.category || entryCategories[draft.type][0],
           type: draft.type,
           amount: line.parsedAmount,
           vatRate: line.parsedVatRate,
@@ -4473,7 +4472,7 @@ function InvoiceImportPanel({
           const amount = Number(draft.amount.toString().replace(",", "."));
           const validVatLines = getValidInvoiceVatLines(draft);
           const splitTotal = calculateInvoiceVatLineTotal(draft.vatLines);
-          const usesSplitLines = draft.type === "expense" && draft.vatLines.length > 1;
+          const usesSplitLines = draft.vatLines.length > 1;
           const isBookable = usesSplitLines
             ? draft.description.trim() && validVatLines.length === draft.vatLines.length
             : draft.description.trim() && Number.isFinite(amount) && amount > 0;
@@ -4586,11 +4585,13 @@ function InvoiceImportPanel({
                 </Field>
               </div>
 
-              {draft.type === "expense" ? (
+              {draft.vatLines.length > 1 || draft.type === "expense" ? (
                 <div className="invoice-vat-lines">
                   <div className="section-title">
                     <div>
-                      <p className="eyebrow">Btw-regels inkoopfactuur</p>
+                      <p className="eyebrow">
+                        {draft.type === "income" ? "Btw-regels verkoopfactuur" : "Btw-regels inkoopfactuur"}
+                      </p>
                       <h4>Splits de factuur per btw-percentage</h4>
                     </div>
                     <button

@@ -11,6 +11,8 @@ type InvoiceAnalysis = {
   type: "income" | "expense";
   category: string;
   amountExVat: number;
+  amountVat: number;
+  amountInclVat: number;
   vatRate: 0 | 9 | 21;
   vatLines: Array<{
     category: string;
@@ -63,12 +65,18 @@ function extractOutputText(data: unknown) {
   return "";
 }
 
+function roundCents(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
 function normalizeAnalysis(value: unknown): InvoiceAnalysis {
   const data = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
   const type = data.type === "income" ? "income" : "expense";
   const rawVatRate = Number(data.vatRate);
   const vatRate = rawVatRate === 9 || rawVatRate === 0 ? rawVatRate : 21;
-  const rawAmount = Number(data.amountExVat);
+  const rawAmountExVat = Number(data.amountExVat);
+  const rawAmountVat = Number(data.amountVat);
+  const rawAmountInclVat = Number(data.amountInclVat);
   const confidence = Math.min(98, Math.max(0, Number(data.confidence) || 55));
   const rawVatLines = Array.isArray(data.vatLines) ? data.vatLines : [];
   const vatLines = rawVatLines
@@ -88,6 +96,44 @@ function normalizeAnalysis(value: unknown): InvoiceAnalysis {
       };
     })
     .filter((line) => line.amountExVat > 0);
+  const vatLinesTotal = roundCents(
+    vatLines.reduce((total, line) => total + line.amountExVat, 0),
+  );
+  const amountExVatFromTotals =
+    Number.isFinite(rawAmountInclVat) &&
+    rawAmountInclVat > 0 &&
+    Number.isFinite(rawAmountVat) &&
+    rawAmountVat >= 0
+      ? roundCents(rawAmountInclVat - rawAmountVat)
+      : 0;
+  const amountExVatFromInclusive =
+    Number.isFinite(rawAmountInclVat) && rawAmountInclVat > 0 && vatRate > 0
+      ? roundCents(rawAmountInclVat / (1 + vatRate / 100))
+      : 0;
+  const rawAmountExVatCandidate =
+    Number.isFinite(rawAmountExVat) && rawAmountExVat > 0
+      ? roundCents(rawAmountExVat)
+      : 0;
+  const correctedAmountExVat =
+    amountExVatFromTotals > 0 &&
+    rawAmountExVatCandidate > 0 &&
+    Math.abs(rawAmountExVatCandidate - rawAmountInclVat) <= 0.05
+      ? amountExVatFromTotals
+      : rawAmountExVatCandidate;
+  const amountExVat =
+    vatLinesTotal > 0
+      ? vatLinesTotal
+      : correctedAmountExVat > 0
+        ? correctedAmountExVat
+        : amountExVatFromTotals || amountExVatFromInclusive;
+  const amountVat =
+    Number.isFinite(rawAmountVat) && rawAmountVat >= 0
+      ? roundCents(rawAmountVat)
+      : roundCents(amountExVat * (vatRate / 100));
+  const amountInclVat =
+    Number.isFinite(rawAmountInclVat) && rawAmountInclVat > 0
+      ? roundCents(rawAmountInclVat)
+      : roundCents(amountExVat + amountVat);
 
   return {
     invoiceNumber: typeof data.invoiceNumber === "string" ? data.invoiceNumber : "",
@@ -107,7 +153,9 @@ function normalizeAnalysis(value: unknown): InvoiceAnalysis {
         : type === "income"
           ? "Omzet diensten"
           : "Inkoop",
-    amountExVat: Number.isFinite(rawAmount) && rawAmount > 0 ? rawAmount : 0,
+    amountExVat,
+    amountVat,
+    amountInclVat,
     vatRate,
     vatLines:
       vatLines.length > 0
@@ -115,7 +163,7 @@ function normalizeAnalysis(value: unknown): InvoiceAnalysis {
         : [
             {
               category: type === "income" ? "Omzet diensten" : "Inkoop",
-              amountExVat: Number.isFinite(rawAmount) && rawAmount > 0 ? rawAmount : 0,
+              amountExVat,
               vatRate,
             },
           ],
@@ -169,12 +217,15 @@ export async function POST(request: NextRequest) {
   const prompt = [
     "Lees deze Nederlandse verkoopfactuur, inkoopfactuur, bon of UBL/XML-factuur.",
     "Geef uitsluitend gegevens terug die nodig zijn om een boeking in BoekBalans voor te stellen.",
-    "Bedragen moeten exclusief btw zijn. Als alleen inclusief btw zichtbaar is, reken dan terug met het gekozen btw-tarief.",
+    "Let strikt op bedragen: amountExVat is de grondslag exclusief btw, amountVat is alleen het btw-bedrag, amountInclVat is het totaal inclusief btw.",
+    "Gebruik NOOIT het totaal inclusief btw als amountExVat. Als alleen inclusief btw zichtbaar is, reken amountExVat terug met het gekozen btw-tarief.",
+    "Bij een verkoopfactuur is relation de klant/afnemer aan wie is gefactureerd, niet de afzender/leverancier van de factuur.",
+    "Bij een inkoopfactuur of bon is relation de leverancier.",
     "Kies type 'income' voor verkoopfacturen en 'expense' voor inkoopfacturen of bonnetjes.",
     "Kies category bij income uit: Omzet diensten, Omzet producten, Abonnementen, Overige inkomsten.",
     "Kies category bij expense uit: Inkoop, Uitbesteed werk, Investeringen, Software, Kantoorkosten, Auto- en transportkosten, Huisvestingskosten, Reiskosten, Marketing, Administratiekosten, Bankkosten, Representatiekosten, Telefoonkosten, Verzekeringen, Overige kosten.",
-    "Als een inkoopfactuur meerdere btw-percentages of grondslagen heeft, vul vatLines met een aparte regel per btw-percentage.",
-    "De som van vatLines.amountExVat moet aansluiten op amountExVat. Gebruik bij verkoopfacturen normaal één vatLine.",
+    "Vul vatLines altijd met de grondslag exclusief btw per btw-percentage. Ook bij verkoopfacturen moet er minimaal één vatLine zijn.",
+    "De som van vatLines.amountExVat moet aansluiten op amountExVat.",
     "Gebruik status 'open' voor verkoopfacturen, tenzij betaling duidelijk zichtbaar is. Gebruik bij kosten standaard 'paid', tenzij openstaand duidelijk zichtbaar is.",
     `Bekende relaties uit deze administratie: ${contacts}`,
   ].join("\n");
@@ -216,6 +267,8 @@ export async function POST(request: NextRequest) {
               type: { type: "string", enum: ["income", "expense"] },
               category: { type: "string" },
               amountExVat: { type: "number" },
+              amountVat: { type: "number" },
+              amountInclVat: { type: "number" },
               vatRate: { type: "number", enum: [0, 9, 21] },
               vatLines: {
                 type: "array",
@@ -242,6 +295,8 @@ export async function POST(request: NextRequest) {
               "type",
               "category",
               "amountExVat",
+              "amountVat",
+              "amountInclVat",
               "vatRate",
               "vatLines",
               "status",
