@@ -27,6 +27,7 @@ type WorkspaceState = "checking" | "setup" | "locked" | "unlocked";
 type Entry = {
   id: string;
   date: string;
+  invoiceNumber?: string;
   description: string;
   relation: string;
   category: string;
@@ -284,6 +285,7 @@ const starterData: Administration[] = [
 
 const emptyEntry = {
   date: today,
+  invoiceNumber: "",
   description: "",
   relation: "",
   type: "income" as EntryType,
@@ -1094,7 +1096,13 @@ function buildPdfReport(
         entry.status === "paid" ? colors.teal : colors.coral,
         "F2",
       );
-      text(truncate(entry.relation, 42), 104, y - 12, 7.5, colors.muted);
+      text(
+        truncate(`${entry.invoiceNumber ? `Factuur ${entry.invoiceNumber} · ` : ""}${entry.relation}`, 42),
+        104,
+        y - 12,
+        7.5,
+        colors.muted,
+      );
       commands.push(`${rgb(colors.line)} RG 0.45 w 42 ${y - 18} m 553 ${y - 18} l S`);
       y -= 28;
     });
@@ -1438,10 +1446,11 @@ function buildEntriesPdf(admin: Administration, entries: Entry[], periodLabel: s
   return buildTablePdf(admin, "Boekingen", periodLabel, [
     {
       title: "Boekingen",
-      headers: ["Datum", "Omschrijving", "Relatie", "Soort", "Categorie", "Excl.", "Btw", "Status", "Betaaldatum"],
-      widths: [42, 98, 62, 50, 66, 48, 34, 42, 55],
+      headers: ["Datum", "Factuur", "Omschrijving", "Relatie", "Soort", "Categorie", "Excl.", "Btw", "Status", "Betaaldatum"],
+      widths: [38, 50, 84, 58, 44, 58, 44, 30, 38, 45],
       rows: entries.map((entry) => [
         entry.date,
+        entry.invoiceNumber || "-",
         entry.description,
         entry.relation,
         entry.type === "income" ? "Inkomsten" : "Uitgaven",
@@ -1914,6 +1923,7 @@ export default function Home() {
         return {
           id: uid(),
           date: entryForm.date,
+          invoiceNumber: entryForm.invoiceNumber.trim() || undefined,
           description: `${entryForm.description.trim()} · ${line.vatRate}% btw`,
           relation: entryForm.relation.trim() || "Onbekende relatie",
           category: lineCategory,
@@ -1951,6 +1961,7 @@ export default function Home() {
     const entry: Entry = {
       id: editingEntryId ?? uid(),
       date: entryForm.date,
+      invoiceNumber: entryForm.invoiceNumber.trim() || undefined,
       description: entryForm.description.trim(),
       relation: entryForm.relation.trim() || "Onbekende relatie",
       category,
@@ -2192,6 +2203,7 @@ export default function Home() {
         return splitLines.map((line) => ({
           id: uid(),
           date: draft.date || today,
+          invoiceNumber: draft.invoiceNumber.trim() || undefined,
           description: `${draft.description.trim()} · ${line.vatRate}% btw`,
           relation: draft.relation.trim() || "Onbekende relatie",
           category: line.category || draft.category || entryCategories[draft.type][0],
@@ -2207,6 +2219,7 @@ export default function Home() {
         {
           id: uid(),
           date: draft.date || today,
+          invoiceNumber: draft.invoiceNumber.trim() || undefined,
           description: draft.description.trim(),
           relation: draft.relation.trim() || "Onbekende relatie",
           category: draft.category || entryCategories[draft.type][0],
@@ -2513,6 +2526,7 @@ export default function Home() {
   const editEntry = (entry: Entry) => {
     setEntryForm({
       date: entry.date,
+      invoiceNumber: entry.invoiceNumber ?? "",
       description: entry.description,
       relation: entry.relation === "Onbekende relatie" ? "" : entry.relation,
       type: entry.type,
@@ -2978,6 +2992,14 @@ export default function Home() {
                   <div className="entry-form-grid">
                   <Field label="Datum">
                     <input className="input" type="date" value={entryForm.date} onChange={(event) => setEntryForm({ ...entryForm, date: event.target.value })} />
+                  </Field>
+                  <Field label="Factuurnummer">
+                    <input
+                      className="input"
+                      placeholder="Bijv. 2026-0161"
+                      value={entryForm.invoiceNumber}
+                      onChange={(event) => setEntryForm({ ...entryForm, invoiceNumber: event.target.value })}
+                    />
                   </Field>
                   <Field label="Omschrijving">
                     <input className="input" value={entryForm.description} onChange={(event) => setEntryForm({ ...entryForm, description: event.target.value })} />
@@ -4365,7 +4387,9 @@ function CompactEntries({ entries }: { entries: Entry[] }) {
         <div className="compact-row" key={entry.id}>
           <div>
             <strong className="block">{entry.description}</strong>
-            <span className="text-xs text-[var(--muted)]">{entry.date} · {entry.relation}</span>
+            <span className="text-xs text-[var(--muted)]">
+              {entry.date} · {entry.invoiceNumber ? `Factuur ${entry.invoiceNumber} · ` : ""}{entry.relation}
+            </span>
           </div>
           <span className={entry.type === "income" ? "amount-positive" : "amount-negative"}>
             {entry.type === "income" ? "+" : "-"} {money.format(entry.amount)}
@@ -4402,10 +4426,11 @@ function EntryTable({
         </button>
       </div>
       <div className="mt-4 overflow-x-auto">
-        <table className="w-full min-w-[900px] border-collapse text-left text-sm">
+        <table className="w-full min-w-[1000px] border-collapse text-left text-sm">
           <thead>
             <tr className="border-b border-[var(--line)] text-xs font-bold uppercase text-[var(--muted)]">
               <th className="py-3 pr-3">Datum</th>
+              <th className="py-3 pr-3">Factuur</th>
               <th className="py-3 pr-3">Omschrijving</th>
               <th className="py-3 pr-3">Soort</th>
               <th className="py-3 pr-3">Categorie</th>
@@ -4419,6 +4444,7 @@ function EntryTable({
             {entries.map((entry) => (
               <tr className="border-b border-[var(--line)] last:border-b-0" key={entry.id}>
                 <td className="py-3 pr-3">{entry.date}</td>
+                <td className="py-3 pr-3">{entry.invoiceNumber || "-"}</td>
                 <td className="py-3 pr-3">
                   <strong className="block">{entry.description}</strong>
                   <span className="text-xs text-[var(--muted)]">{entry.relation}</span>

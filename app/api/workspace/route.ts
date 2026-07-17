@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 type Entry = {
   id: string;
   date: string;
+  invoiceNumber?: string;
   description: string;
   relation: string;
   category: string;
