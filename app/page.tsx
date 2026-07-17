@@ -1039,12 +1039,12 @@ function buildPdfReport(
 
   const addEntryHeader = () => {
     rect(42, y - 14, 511, 22, colors.tealSoft, colors.line);
-    text("Datum", 50, y - 6, 8, colors.teal, "F2");
-    text("Omschrijving", 104, y - 6, 8, colors.teal, "F2");
-    text("Soort", 285, y - 6, 8, colors.teal, "F2");
-    text("Categorie", 350, y - 6, 8, colors.teal, "F2");
-    text("Bedrag", 440, y - 6, 8, colors.teal, "F2");
-    text("Status", 508, y - 6, 8, colors.teal, "F2");
+    text("Relatie", 50, y - 6, 8, colors.teal, "F2");
+    text("Datum", 150, y - 6, 8, colors.teal, "F2");
+    text("Factuur", 205, y - 6, 8, colors.teal, "F2");
+    text("Omschrijving", 260, y - 6, 8, colors.teal, "F2");
+    text("Bedrag", 420, y - 6, 8, colors.teal, "F2");
+    text("Status", 500, y - 6, 8, colors.teal, "F2");
     y -= 28;
   };
 
@@ -1083,26 +1083,20 @@ function buildPdfReport(
       const kind = entry.type === "income" ? "Inkomsten" : "Uitgaven";
       ensureSpace(28);
       if (y > 750 || y < 74) addEntryHeader();
-      text(entry.date, 50, y, 8.5);
-      text(truncate(entry.description, 29), 104, y, 8.5, colors.ink, "F2");
-      text(kind, 285, y, 8.5);
-      text(truncate(entry.category, 15), 350, y, 8.5);
-      text(money.format(entry.amount), 440, y, 8.5);
+      text(truncate(entry.relation, 18), 50, y, 8.5);
+      text(entry.date, 150, y, 8.5);
+      text(truncate(entry.invoiceNumber || "-", 11), 205, y, 8.5);
+      text(truncate(entry.description, 24), 260, y, 8.5, colors.ink, "F2");
+      text(money.format(entry.amount), 420, y, 8.5);
       text(
         entry.status === "paid" ? `Betaald${entry.paidDate ? ` ${entry.paidDate}` : ""}` : "Open",
-        508,
+        500,
         y,
         8.5,
         entry.status === "paid" ? colors.teal : colors.coral,
         "F2",
       );
-      text(
-        truncate(`${entry.invoiceNumber ? `Factuur ${entry.invoiceNumber} · ` : ""}${entry.relation}`, 42),
-        104,
-        y - 12,
-        7.5,
-        colors.muted,
-      );
+      text(truncate(`${kind} · ${entry.category}`, 40), 260, y - 12, 7.5, colors.muted);
       commands.push(`${rgb(colors.line)} RG 0.45 w 42 ${y - 18} m 553 ${y - 18} l S`);
       y -= 28;
     });
@@ -1446,19 +1440,19 @@ function buildEntriesPdf(admin: Administration, entries: Entry[], periodLabel: s
   return buildTablePdf(admin, "Boekingen", periodLabel, [
     {
       title: "Boekingen",
-      headers: ["Datum", "Factuur", "Omschrijving", "Relatie", "Soort", "Categorie", "Excl.", "Btw", "Status", "Betaaldatum"],
-      widths: [38, 50, 84, 58, 44, 58, 44, 30, 38, 45],
+      headers: ["Relatie", "Datum", "Factuur", "Omschrijving", "Excl.", "Btw", "Status", "Betaaldatum", "Soort", "Categorie"],
+      widths: [68, 40, 48, 86, 45, 30, 42, 50, 44, 58],
       rows: entries.map((entry) => [
+        entry.relation,
         entry.date,
         entry.invoiceNumber || "-",
         entry.description,
-        entry.relation,
-        entry.type === "income" ? "Inkomsten" : "Uitgaven",
-        entry.category,
         money.format(entry.amount),
         `${entry.vatRate}%`,
         entry.status === "paid" ? "Betaald" : "Open",
         entry.status === "paid" ? entry.paidDate || "-" : "-",
+        entry.type === "income" ? "Inkomsten" : "Uitgaven",
+        entry.category,
       ]),
       emptyText: "Geen boekingen in deze periode.",
     },
@@ -2990,127 +2984,127 @@ export default function Home() {
                     </button>
                   </div>
                   <div className="entry-form-grid">
-                  <Field label="Datum">
-                    <input className="input" type="date" value={entryForm.date} onChange={(event) => setEntryForm({ ...entryForm, date: event.target.value })} />
-                  </Field>
-                  <Field label="Factuurnummer">
-                    <input
-                      className="input"
-                      placeholder="Bijv. 2026-0161"
-                      value={entryForm.invoiceNumber}
-                      onChange={(event) => setEntryForm({ ...entryForm, invoiceNumber: event.target.value })}
-                    />
-                  </Field>
-                  <Field label="Omschrijving">
-                    <input className="input" value={entryForm.description} onChange={(event) => setEntryForm({ ...entryForm, description: event.target.value })} />
-                  </Field>
-                  <Field label="Relatie">
-                    <input
-                      className="input"
-                      list={relationListId}
-                      placeholder="Kies of typ een relatie"
-                      value={entryForm.relation}
-                      onChange={(event) => setEntryForm({ ...entryForm, relation: event.target.value })}
-                    />
-                    <datalist id={relationListId}>
-                      {relationSuggestions.map((contact) => (
-                        <option key={contact.id} value={contact.name}>
-                          {contact.type === "customer" ? "Klant" : "Leverancier"}
-                          {contact.kvk ? ` · KvK ${contact.kvk}` : ""}
-                        </option>
-                      ))}
-                    </datalist>
-                  </Field>
-                  <Field label="Categorie">
-                    <select
-                      className="input"
-                      value={entryForm.category}
-                      onChange={(event) => {
-                        const category = event.target.value;
-                        setEntryForm({
-                          ...entryForm,
-                          category,
-                          vatLines:
-                            entryForm.vatLines.length === 1
-                              ? [{ ...entryForm.vatLines[0], category }]
-                              : entryForm.vatLines,
-                          depreciationYears: category === "Investeringen" ? entryForm.depreciationYears : "none",
-                        });
-                      }}
-                    >
-                      {entryCategories[entryForm.type].map((category) => (
-                        <option key={category} value={category}>
-                          {category}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                  <Field label="Bedrag excl. btw">
-                    <input
-                      className="input"
-                      inputMode="decimal"
-                      readOnly={entryUsesSplitVatLines}
-                      value={entryUsesSplitVatLines ? formatDecimalInput(entryVatLinesTotal) : entryForm.amount}
-                      onChange={(event) =>
-                        setEntryForm({
-                          ...entryForm,
-                          amount: event.target.value,
-                          vatLines:
-                            entryForm.vatLines.length === 1
-                              ? [{ ...entryForm.vatLines[0], amount: event.target.value }]
-                              : entryForm.vatLines,
-                        })
-                      }
-                    />
-                  </Field>
-                  <Field label="Btw">
-                    <select
-                      className="input"
-                      disabled={entryUsesSplitVatLines}
-                      value={entryForm.vatRate}
-                      onChange={(event) =>
-                        setEntryForm({
-                          ...entryForm,
-                          vatRate: event.target.value,
-                          vatLines:
-                            entryForm.vatLines.length === 1
-                              ? [{ ...entryForm.vatLines[0], vatRate: event.target.value }]
-                              : entryForm.vatLines,
-                        })
-                      }
-                    >
-                      <option value="21">21%</option>
-                      <option value="9">9%</option>
-                      <option value="0">0%</option>
-                    </select>
-                  </Field>
-                  <Field label="Status">
-                    <select
-                      className="input"
-                      value={entryForm.status}
-                      onChange={(event) => {
-                        const status = event.target.value as EntryStatus;
-                        setEntryForm({
-                          ...entryForm,
-                          status,
-                          paidDate: status === "paid" ? entryForm.paidDate || entryForm.date : "",
-                        });
-                      }}
-                    >
-                      <option value="paid">Betaald</option>
-                      <option value="open">Open</option>
-                    </select>
-                  </Field>
-                  {entryForm.status === "paid" ? (
-                    <Field label="Betaaldatum">
+                    <Field label="Relatie">
                       <input
                         className="input"
-                        type="date"
-                        value={entryForm.paidDate}
-                        onChange={(event) => setEntryForm({ ...entryForm, paidDate: event.target.value })}
+                        list={relationListId}
+                        placeholder="Kies of typ een relatie"
+                        value={entryForm.relation}
+                        onChange={(event) => setEntryForm({ ...entryForm, relation: event.target.value })}
+                      />
+                      <datalist id={relationListId}>
+                        {relationSuggestions.map((contact) => (
+                          <option key={contact.id} value={contact.name}>
+                            {contact.type === "customer" ? "Klant" : "Leverancier"}
+                            {contact.kvk ? ` · KvK ${contact.kvk}` : ""}
+                          </option>
+                        ))}
+                      </datalist>
+                    </Field>
+                    <Field label="Factuurdatum">
+                      <input className="input" type="date" value={entryForm.date} onChange={(event) => setEntryForm({ ...entryForm, date: event.target.value })} />
+                    </Field>
+                    <Field label="Factuurnummer">
+                      <input
+                        className="input"
+                        placeholder="Bijv. 2026-0161"
+                        value={entryForm.invoiceNumber}
+                        onChange={(event) => setEntryForm({ ...entryForm, invoiceNumber: event.target.value })}
                       />
                     </Field>
-                  ) : null}
+                    <Field label="Omschrijving">
+                      <input className="input" value={entryForm.description} onChange={(event) => setEntryForm({ ...entryForm, description: event.target.value })} />
+                    </Field>
+                    <Field label="Bedrag excl. btw">
+                      <input
+                        className="input"
+                        inputMode="decimal"
+                        readOnly={entryUsesSplitVatLines}
+                        value={entryUsesSplitVatLines ? formatDecimalInput(entryVatLinesTotal) : entryForm.amount}
+                        onChange={(event) =>
+                          setEntryForm({
+                            ...entryForm,
+                            amount: event.target.value,
+                            vatLines:
+                              entryForm.vatLines.length === 1
+                                ? [{ ...entryForm.vatLines[0], amount: event.target.value }]
+                                : entryForm.vatLines,
+                          })
+                        }
+                      />
+                    </Field>
+                    <Field label="Btw">
+                      <select
+                        className="input"
+                        disabled={entryUsesSplitVatLines}
+                        value={entryForm.vatRate}
+                        onChange={(event) =>
+                          setEntryForm({
+                            ...entryForm,
+                            vatRate: event.target.value,
+                            vatLines:
+                              entryForm.vatLines.length === 1
+                                ? [{ ...entryForm.vatLines[0], vatRate: event.target.value }]
+                                : entryForm.vatLines,
+                          })
+                        }
+                      >
+                        <option value="21">21%</option>
+                        <option value="9">9%</option>
+                        <option value="0">0%</option>
+                      </select>
+                    </Field>
+                    <Field label="Status">
+                      <select
+                        className="input"
+                        value={entryForm.status}
+                        onChange={(event) => {
+                          const status = event.target.value as EntryStatus;
+                          setEntryForm({
+                            ...entryForm,
+                            status,
+                            paidDate: status === "paid" ? entryForm.paidDate || entryForm.date : "",
+                          });
+                        }}
+                      >
+                        <option value="paid">Betaald</option>
+                        <option value="open">Open</option>
+                      </select>
+                    </Field>
+                    {entryForm.status === "paid" ? (
+                      <Field label="Betaaldatum">
+                        <input
+                          className="input"
+                          type="date"
+                          value={entryForm.paidDate}
+                          onChange={(event) => setEntryForm({ ...entryForm, paidDate: event.target.value })}
+                        />
+                      </Field>
+                    ) : null}
+                    <Field label="Categorie">
+                      <select
+                        className="input"
+                        value={entryForm.category}
+                        onChange={(event) => {
+                          const category = event.target.value;
+                          setEntryForm({
+                            ...entryForm,
+                            category,
+                            vatLines:
+                              entryForm.vatLines.length === 1
+                                ? [{ ...entryForm.vatLines[0], category }]
+                                : entryForm.vatLines,
+                            depreciationYears: category === "Investeringen" ? entryForm.depreciationYears : "none",
+                          });
+                        }}
+                      >
+                        {entryCategories[entryForm.type].map((category) => (
+                          <option key={category} value={category}>
+                            {category}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
                   </div>
                   {entryForm.type === "expense" ? (
                     <div className="entry-vat-lines">
@@ -4386,9 +4380,9 @@ function CompactEntries({ entries }: { entries: Entry[] }) {
       {entries.map((entry) => (
         <div className="compact-row" key={entry.id}>
           <div>
-            <strong className="block">{entry.description}</strong>
+            <strong className="block">{entry.relation}</strong>
             <span className="text-xs text-[var(--muted)]">
-              {entry.date} · {entry.invoiceNumber ? `Factuur ${entry.invoiceNumber} · ` : ""}{entry.relation}
+              {entry.date} · {entry.invoiceNumber ? `Factuur ${entry.invoiceNumber} · ` : ""}{entry.description}
             </span>
           </div>
           <span className={entry.type === "income" ? "amount-positive" : "amount-negative"}>
@@ -4426,42 +4420,45 @@ function EntryTable({
         </button>
       </div>
       <div className="mt-4 overflow-x-auto">
-        <table className="w-full min-w-[1000px] border-collapse text-left text-sm">
+        <table className="w-full min-w-[1120px] border-collapse text-left text-sm">
           <thead>
             <tr className="border-b border-[var(--line)] text-xs font-bold uppercase text-[var(--muted)]">
+              <th className="py-3 pr-3">Relatie</th>
               <th className="py-3 pr-3">Datum</th>
               <th className="py-3 pr-3">Factuur</th>
               <th className="py-3 pr-3">Omschrijving</th>
+              <th className="py-3 pr-3">Excl. btw</th>
+              <th className="py-3 pr-3">Btw</th>
+              <th className="py-3 pr-3">Status</th>
               <th className="py-3 pr-3">Soort</th>
               <th className="py-3 pr-3">Categorie</th>
-              <th className="py-3 pr-3">Excl. btw</th>
               <th className="py-3 pr-3">Afschrijving</th>
-              <th className="py-3 pr-3">Status</th>
               <th className="py-3 pr-3">Actie</th>
             </tr>
           </thead>
           <tbody>
             {entries.map((entry) => (
               <tr className="border-b border-[var(--line)] last:border-b-0" key={entry.id}>
+                <td className="py-3 pr-3 font-semibold">{entry.relation}</td>
                 <td className="py-3 pr-3">{entry.date}</td>
                 <td className="py-3 pr-3">{entry.invoiceNumber || "-"}</td>
                 <td className="py-3 pr-3">
                   <strong className="block">{entry.description}</strong>
-                  <span className="text-xs text-[var(--muted)]">{entry.relation}</span>
                 </td>
-                <td className="py-3 pr-3">{entry.type === "income" ? "Inkomsten" : "Uitgaven"}</td>
-                <td className="py-3 pr-3">{entry.category}</td>
                 <td className="py-3 pr-3">{money.format(entry.amount)}</td>
-                <td className="py-3 pr-3">
-                  {entry.depreciationYears
-                    ? `${entry.depreciationYears} jaar · ${money.format(entry.amount / entry.depreciationYears)} p.j.`
-                    : "-"}
-                </td>
+                <td className="py-3 pr-3">{entry.vatRate}%</td>
                 <td className="py-3 pr-3">
                   <span className="font-semibold">{entry.status === "paid" ? "Betaald" : "Open"}</span>
                   {entry.status === "paid" && entry.paidDate ? (
                     <span className="block text-xs text-[var(--muted)]">op {entry.paidDate}</span>
                   ) : null}
+                </td>
+                <td className="py-3 pr-3">{entry.type === "income" ? "Inkomsten" : "Uitgaven"}</td>
+                <td className="py-3 pr-3">{entry.category}</td>
+                <td className="py-3 pr-3">
+                  {entry.depreciationYears
+                    ? `${entry.depreciationYears} jaar · ${money.format(entry.amount / entry.depreciationYears)} p.j.`
+                    : "-"}
                 </td>
                 <td className="py-3 pr-3">
                   <div className="flex gap-2">
@@ -4614,17 +4611,16 @@ function InvoiceImportPanel({
               </div>
 
               <div className="invoice-form-grid">
-                <Field label="Soort">
-                  <select
+                <Field label="Relatie">
+                  <input
                     className="input"
-                    value={draft.type}
-                    onChange={(event) => onUpdate(draft.id, "type", event.target.value as EntryType)}
-                  >
-                    <option value="income">Verkoopfactuur</option>
-                    <option value="expense">Inkoopfactuur</option>
-                  </select>
+                    list={relationListId}
+                    placeholder="Kies of typ een relatie"
+                    value={draft.relation}
+                    onChange={(event) => onUpdate(draft.id, "relation", event.target.value)}
+                  />
                 </Field>
-                <Field label="Datum">
+                <Field label="Factuurdatum">
                   <input
                     className="input"
                     type="date"
@@ -4639,34 +4635,12 @@ function InvoiceImportPanel({
                     onChange={(event) => onUpdate(draft.id, "invoiceNumber", event.target.value)}
                   />
                 </Field>
-                <Field label="Relatie">
-                  <input
-                    className="input"
-                    list={relationListId}
-                    placeholder="Kies of typ een relatie"
-                    value={draft.relation}
-                    onChange={(event) => onUpdate(draft.id, "relation", event.target.value)}
-                  />
-                </Field>
                 <Field label="Omschrijving">
                   <input
                     className="input"
                     value={draft.description}
                     onChange={(event) => onUpdate(draft.id, "description", event.target.value)}
                   />
-                </Field>
-                <Field label="Categorie">
-                  <select
-                    className="input"
-                    value={draft.category}
-                    onChange={(event) => onUpdate(draft.id, "category", event.target.value)}
-                  >
-                    {entryCategories[draft.type].map((category) => (
-                      <option key={category} value={category}>
-                        {category}
-                      </option>
-                    ))}
-                  </select>
                 </Field>
                 <Field label="Bedrag excl. btw">
                   <input
@@ -4707,6 +4681,29 @@ function InvoiceImportPanel({
                     />
                   </Field>
                 ) : null}
+                <Field label="Soort">
+                  <select
+                    className="input"
+                    value={draft.type}
+                    onChange={(event) => onUpdate(draft.id, "type", event.target.value as EntryType)}
+                  >
+                    <option value="income">Verkoopfactuur</option>
+                    <option value="expense">Inkoopfactuur</option>
+                  </select>
+                </Field>
+                <Field label="Categorie">
+                  <select
+                    className="input"
+                    value={draft.category}
+                    onChange={(event) => onUpdate(draft.id, "category", event.target.value)}
+                  >
+                    {entryCategories[draft.type].map((category) => (
+                      <option key={category} value={category}>
+                        {category}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
               </div>
 
               {draft.vatLines.length > 1 || draft.type === "expense" ? (
