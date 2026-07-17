@@ -34,6 +34,7 @@ type Entry = {
   amount: number;
   vatRate: number;
   status: EntryStatus;
+  paidDate?: string;
   depreciationYears?: 5 | 10;
 };
 
@@ -104,6 +105,7 @@ type InvoiceDraft = {
   vatRate: string;
   vatLines: InvoiceVatLine[];
   status: EntryStatus;
+  paidDate: string;
   selected: boolean;
 };
 
@@ -290,6 +292,7 @@ const emptyEntry = {
   vatRate: "21",
   vatLines: [createInvoiceVatLine(entryCategories.expense[0], "", "21")],
   status: "paid" as EntryStatus,
+  paidDate: "",
   depreciationYears: "none",
 };
 
@@ -491,6 +494,7 @@ function buildInvoiceDraft(file: File, sourceText: string, contacts: Contact[]):
       createInvoiceVatLine(entryCategories[type][0], amount, vatRate),
     ],
     status: type === "income" ? "open" : "paid",
+    paidDate: type === "income" ? "" : findDateCandidate(source),
     selected: true,
   };
 }
@@ -561,6 +565,7 @@ function buildAiInvoiceDraft(file: File, result: InvoiceAiResult): InvoiceDraft 
             ),
           ],
     status: result.status,
+    paidDate: result.status === "paid" ? result.date || today : "",
     selected: true,
   };
 }
@@ -1081,7 +1086,14 @@ function buildPdfReport(
       text(kind, 285, y, 8.5);
       text(truncate(entry.category, 15), 350, y, 8.5);
       text(money.format(entry.amount), 440, y, 8.5);
-      text(entry.status === "paid" ? "Betaald" : "Open", 508, y, 8.5, entry.status === "paid" ? colors.teal : colors.coral, "F2");
+      text(
+        entry.status === "paid" ? `Betaald${entry.paidDate ? ` ${entry.paidDate}` : ""}` : "Open",
+        508,
+        y,
+        8.5,
+        entry.status === "paid" ? colors.teal : colors.coral,
+        "F2",
+      );
       text(truncate(entry.relation, 42), 104, y - 12, 7.5, colors.muted);
       commands.push(`${rgb(colors.line)} RG 0.45 w 42 ${y - 18} m 553 ${y - 18} l S`);
       y -= 28;
@@ -1426,8 +1438,8 @@ function buildEntriesPdf(admin: Administration, entries: Entry[], periodLabel: s
   return buildTablePdf(admin, "Boekingen", periodLabel, [
     {
       title: "Boekingen",
-      headers: ["Datum", "Omschrijving", "Relatie", "Soort", "Categorie", "Excl.", "Btw", "Status"],
-      widths: [50, 112, 75, 58, 76, 52, 46, 42],
+      headers: ["Datum", "Omschrijving", "Relatie", "Soort", "Categorie", "Excl.", "Btw", "Status", "Betaaldatum"],
+      widths: [42, 98, 62, 50, 66, 48, 34, 42, 55],
       rows: entries.map((entry) => [
         entry.date,
         entry.description,
@@ -1437,6 +1449,7 @@ function buildEntriesPdf(admin: Administration, entries: Entry[], periodLabel: s
         money.format(entry.amount),
         `${entry.vatRate}%`,
         entry.status === "paid" ? "Betaald" : "Open",
+        entry.status === "paid" ? entry.paidDate || "-" : "-",
       ]),
       emptyText: "Geen boekingen in deze periode.",
     },
@@ -1908,6 +1921,7 @@ export default function Home() {
           amount: line.parsedAmount,
           vatRate: line.parsedVatRate,
           status: entryForm.status,
+          paidDate: entryForm.status === "paid" ? entryForm.paidDate || entryForm.date : undefined,
           depreciationYears: lineDepreciationYears,
         };
       });
@@ -1944,6 +1958,7 @@ export default function Home() {
       amount,
       vatRate: Number(entryForm.vatRate),
       status: entryForm.status,
+      paidDate: entryForm.status === "paid" ? entryForm.paidDate || entryForm.date : undefined,
       depreciationYears,
     };
 
@@ -2075,9 +2090,17 @@ export default function Home() {
           const type = value as EntryType;
           next.category = entryCategories[type][0];
           next.status = type === "income" ? "open" : "paid";
+          next.paidDate = type === "income" ? "" : next.paidDate || next.date || today;
           next.vatLines = [
             createInvoiceVatLine(entryCategories[type][0], next.amount, next.vatRate),
           ];
+        }
+        if (field === "status") {
+          const status = value as EntryStatus;
+          next.paidDate = status === "paid" ? next.paidDate || next.date || today : "";
+        }
+        if (field === "date" && next.status === "paid" && !next.paidDate) {
+          next.paidDate = String(value);
         }
         if (field === "amount" && next.vatLines.length === 1) {
           next.vatLines = [{ ...next.vatLines[0], amount: String(value) }];
@@ -2176,6 +2199,7 @@ export default function Home() {
           amount: line.parsedAmount,
           vatRate: line.parsedVatRate,
           status: draft.status,
+          paidDate: draft.status === "paid" ? draft.paidDate || draft.date || today : undefined,
         }));
       }
 
@@ -2190,6 +2214,7 @@ export default function Home() {
           amount: Number(draft.amount.toString().replace(",", ".")),
           vatRate: Number(draft.vatRate),
           status: draft.status,
+          paidDate: draft.status === "paid" ? draft.paidDate || draft.date || today : undefined,
         },
       ];
     });
@@ -2502,6 +2527,7 @@ export default function Home() {
         ),
       ],
       status: entry.status,
+      paidDate: entry.paidDate ?? "",
       depreciationYears: entry.depreciationYears ? String(entry.depreciationYears) : "none",
     });
     setEditingEntryId(entry.id);
@@ -2517,7 +2543,7 @@ export default function Home() {
     updateActive({
       ...active,
       entries: active.entries.map((entry) =>
-        entry.id === entryId ? { ...entry, status: "paid" } : entry,
+        entry.id === entryId ? { ...entry, status: "paid", paidDate: entry.paidDate || today } : entry,
       ),
     });
   };
@@ -3037,11 +3063,32 @@ export default function Home() {
                     </select>
                   </Field>
                   <Field label="Status">
-                    <select className="input" value={entryForm.status} onChange={(event) => setEntryForm({ ...entryForm, status: event.target.value as EntryStatus })}>
+                    <select
+                      className="input"
+                      value={entryForm.status}
+                      onChange={(event) => {
+                        const status = event.target.value as EntryStatus;
+                        setEntryForm({
+                          ...entryForm,
+                          status,
+                          paidDate: status === "paid" ? entryForm.paidDate || entryForm.date : "",
+                        });
+                      }}
+                    >
                       <option value="paid">Betaald</option>
                       <option value="open">Open</option>
                     </select>
                   </Field>
+                  {entryForm.status === "paid" ? (
+                    <Field label="Betaaldatum">
+                      <input
+                        className="input"
+                        type="date"
+                        value={entryForm.paidDate}
+                        onChange={(event) => setEntryForm({ ...entryForm, paidDate: event.target.value })}
+                      />
+                    </Field>
+                  ) : null}
                   </div>
                   {entryForm.type === "expense" ? (
                     <div className="entry-vat-lines">
@@ -4384,7 +4431,12 @@ function EntryTable({
                     ? `${entry.depreciationYears} jaar · ${money.format(entry.amount / entry.depreciationYears)} p.j.`
                     : "-"}
                 </td>
-                <td className="py-3 pr-3">{entry.status === "paid" ? "Betaald" : "Open"}</td>
+                <td className="py-3 pr-3">
+                  <span className="font-semibold">{entry.status === "paid" ? "Betaald" : "Open"}</span>
+                  {entry.status === "paid" && entry.paidDate ? (
+                    <span className="block text-xs text-[var(--muted)]">op {entry.paidDate}</span>
+                  ) : null}
+                </td>
                 <td className="py-3 pr-3">
                   <div className="flex gap-2">
                     <button className="ghost-button" onClick={() => onEdit(entry)}>
@@ -4619,6 +4671,16 @@ function InvoiceImportPanel({
                     <option value="open">Open</option>
                   </select>
                 </Field>
+                {draft.status === "paid" ? (
+                  <Field label="Betaaldatum">
+                    <input
+                      className="input"
+                      type="date"
+                      value={draft.paidDate}
+                      onChange={(event) => onUpdate(draft.id, "paidDate", event.target.value)}
+                    />
+                  </Field>
+                ) : null}
               </div>
 
               {draft.vatLines.length > 1 || draft.type === "expense" ? (

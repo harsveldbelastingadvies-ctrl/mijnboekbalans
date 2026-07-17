@@ -14,6 +14,7 @@ type Entry = {
   amount: number;
   vatRate: number;
   status: "paid" | "open";
+  paidDate?: string;
   depreciationYears?: 5 | 10;
 };
 
