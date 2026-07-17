@@ -85,6 +85,10 @@ function roundCents(value: number) {
   return Math.round(value * 100) / 100;
 }
 
+function isFiniteNonZero(value: number) {
+  return Number.isFinite(value) && value !== 0;
+}
+
 function normalizeSearchText(value: string) {
   return value
     .toLowerCase()
@@ -163,6 +167,13 @@ function normalizeAnalysis(value: unknown, administrationJson: string): InvoiceA
   const rawAmountExVat = Number(data.amountExVat);
   const rawAmountVat = Number(data.amountVat);
   const rawAmountInclVat = Number(data.amountInclVat);
+  const isCreditInvoice =
+    rawAmountExVat < 0 ||
+    rawAmountVat < 0 ||
+    rawAmountInclVat < 0 ||
+    /\b(credit(?:factuur|nota)?|creditnota|creditfactuur|credit\s+invoice|refund)\b/i.test(
+      `${getString(data, "description")} ${getString(data, "note")}`,
+    );
   const confidence = Math.min(98, Math.max(0, Number(data.confidence) || 55));
   const rawVatLines = Array.isArray(data.vatLines) ? data.vatLines : [];
   const rawCategory = getString(data, "category");
@@ -197,6 +208,7 @@ function normalizeAnalysis(value: unknown, administrationJson: string): InvoiceA
       const record = line && typeof line === "object" ? (line as Record<string, unknown>) : {};
       const lineVatRate = Number(record.vatRate);
       const lineAmount = Number(record.amountExVat);
+      const signedLineAmount = isCreditInvoice && lineAmount > 0 ? -lineAmount : lineAmount;
       return {
         category:
           typeof record.category === "string" && record.category.trim()
@@ -204,48 +216,46 @@ function normalizeAnalysis(value: unknown, administrationJson: string): InvoiceA
             : type === "income"
               ? "Omzet diensten"
               : "Inkoop",
-        amountExVat: Number.isFinite(lineAmount) && lineAmount > 0 ? lineAmount : 0,
+        amountExVat: isFiniteNonZero(signedLineAmount) ? signedLineAmount : 0,
         vatRate: (lineVatRate === 9 || lineVatRate === 0 ? lineVatRate : 21) as 0 | 9 | 21,
       };
     })
-    .filter((line) => line.amountExVat > 0);
+    .filter((line) => line.amountExVat !== 0);
   const vatLinesTotal = roundCents(
     vatLines.reduce((total, line) => total + line.amountExVat, 0),
   );
   const amountExVatFromTotals =
-    Number.isFinite(rawAmountInclVat) &&
-    rawAmountInclVat > 0 &&
-    Number.isFinite(rawAmountVat) &&
-    rawAmountVat >= 0
-      ? roundCents(rawAmountInclVat - rawAmountVat)
+    isFiniteNonZero(rawAmountInclVat) &&
+    Number.isFinite(rawAmountVat)
+      ? roundCents(rawAmountInclVat - (rawAmountInclVat < 0 && rawAmountVat > 0 ? -rawAmountVat : rawAmountVat))
       : 0;
   const amountExVatFromInclusive =
-    Number.isFinite(rawAmountInclVat) && rawAmountInclVat > 0 && vatRate > 0
+    isFiniteNonZero(rawAmountInclVat) && vatRate > 0
       ? roundCents(rawAmountInclVat / (1 + vatRate / 100))
       : 0;
   const rawAmountExVatCandidate =
-    Number.isFinite(rawAmountExVat) && rawAmountExVat > 0
-      ? roundCents(rawAmountExVat)
+    isFiniteNonZero(rawAmountExVat)
+      ? roundCents(isCreditInvoice && rawAmountExVat > 0 ? -rawAmountExVat : rawAmountExVat)
       : 0;
   const correctedAmountExVat =
-    amountExVatFromTotals > 0 &&
-    rawAmountExVatCandidate > 0 &&
-    Math.abs(rawAmountExVatCandidate - rawAmountInclVat) <= 0.05
+    amountExVatFromTotals !== 0 &&
+    rawAmountExVatCandidate !== 0 &&
+    Math.abs(Math.abs(rawAmountExVatCandidate) - Math.abs(rawAmountInclVat)) <= 0.05
       ? amountExVatFromTotals
       : rawAmountExVatCandidate;
   const amountExVat =
-    vatLinesTotal > 0
+    vatLinesTotal !== 0
       ? vatLinesTotal
-      : correctedAmountExVat > 0
+      : correctedAmountExVat !== 0
         ? correctedAmountExVat
         : amountExVatFromTotals || amountExVatFromInclusive;
   const amountVat =
-    Number.isFinite(rawAmountVat) && rawAmountVat >= 0
-      ? roundCents(rawAmountVat)
+    isFiniteNonZero(rawAmountVat)
+      ? roundCents(isCreditInvoice && rawAmountVat > 0 ? -rawAmountVat : rawAmountVat)
       : roundCents(amountExVat * (vatRate / 100));
   const amountInclVat =
-    Number.isFinite(rawAmountInclVat) && rawAmountInclVat > 0
-      ? roundCents(rawAmountInclVat)
+    isFiniteNonZero(rawAmountInclVat)
+      ? roundCents(isCreditInvoice && rawAmountInclVat > 0 ? -rawAmountInclVat : rawAmountInclVat)
       : roundCents(amountExVat + amountVat);
 
   return {
@@ -337,6 +347,7 @@ export async function POST(request: NextRequest) {
     "Geef uitsluitend gegevens terug die nodig zijn om een boeking in BoekBalans voor te stellen.",
     "Let strikt op bedragen: amountExVat is de grondslag exclusief btw, amountVat is alleen het btw-bedrag, amountInclVat is het totaal inclusief btw.",
     "Gebruik NOOIT het totaal inclusief btw als amountExVat. Als alleen inclusief btw zichtbaar is, reken amountExVat terug met het gekozen btw-tarief.",
+    "Bij een creditfactuur of creditnota moeten amountExVat, amountVat, amountInclVat en vatLines.amountExVat negatief zijn.",
     "Vul supplierName/supplierKvk/supplierVatNumber met de afzender/leverancier van de factuur.",
     "Vul customerName/customerKvk/customerVatNumber met de afnemer/klant aan wie is gefactureerd.",
     "Bij een verkoopfactuur is relation gelijk aan customerName. Bij een inkoopfactuur of bon is relation gelijk aan supplierName.",

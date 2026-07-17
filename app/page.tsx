@@ -349,6 +349,18 @@ function formatDecimalInput(value: number) {
   return value.toFixed(2).replace(".", ",");
 }
 
+function isValidBookingAmount(value: number | null): value is number {
+  return value !== null && Number.isFinite(value) && value !== 0;
+}
+
+function parseAmountInput(value: string) {
+  return parseDecimal(value.toString());
+}
+
+function sourceLooksLikeCreditInvoice(source: string) {
+  return /\b(credit(?:factuur|nota)?|creditnota|creditfactuur|credit\s+invoice|refund)\b/i.test(source);
+}
+
 function findDateCandidate(source: string) {
   const iso = source.match(/\b(20\d{2})[-_/ .](0?[1-9]|1[0-2])[-_/ .](0?[1-9]|[12]\d|3[01])\b/);
   if (iso) {
@@ -390,20 +402,26 @@ function findAmountCandidate(source: string, vatRate: string) {
   );
   const labeledLine = exactExVatLine || totalLine;
   const candidateSource = labeledLine || source;
-  const matches = Array.from(candidateSource.matchAll(/(?:eur|€)?\s*(\d{1,3}(?:[.\s]\d{3})*[,.]\d{2}|\d+[,.]\d{2})/gi));
+  const matches = Array.from(candidateSource.matchAll(/(?:eur|€)?\s*(-?\d{1,3}(?:[.\s]\d{3})*[,.]\d{2}|-?\d+[,.]\d{2})/gi));
   const amounts = matches
     .map((match) => parseDecimal(match[1]))
-    .filter((amount): amount is number => amount !== null && amount > 0);
+    .filter((amount): amount is number => isValidBookingAmount(amount));
   if (!amounts.length) return "";
 
-  const largestAmount = Math.max(...amounts);
+  const largestAmount = amounts.reduce((largest, amount) =>
+    Math.abs(amount) > Math.abs(largest) ? amount : largest,
+  );
   const rate = Number(vatRate);
   const hasInclusiveHint = /(incl\.?\s*btw|te betalen|totaal|amount due|total)/i.test(candidateSource);
   const hasExclusiveHint = /(excl\.?\s*btw|subtotaal|grondslag)/i.test(candidateSource);
-  const exclusiveAmount =
+  const exclusiveAmountRaw =
     hasInclusiveHint && !hasExclusiveHint && rate > 0
       ? largestAmount / (1 + rate / 100)
       : largestAmount;
+  const exclusiveAmount =
+    sourceLooksLikeCreditInvoice(source) && exclusiveAmountRaw > 0
+      ? -exclusiveAmountRaw
+      : exclusiveAmountRaw;
 
   return formatDecimalInput(exclusiveAmount);
 }
@@ -412,22 +430,31 @@ function getValidInvoiceVatLines(draft: InvoiceDraft) {
   return draft.vatLines
     .map((line) => ({
       ...line,
-      parsedAmount: Number(line.amount.toString().replace(",", ".")),
+      parsedAmount: parseAmountInput(line.amount),
       parsedVatRate: Number(line.vatRate),
     }))
     .filter(
-      (line) =>
-        Number.isFinite(line.parsedAmount) &&
-        line.parsedAmount > 0 &&
-        Number.isFinite(line.parsedVatRate),
+      (line): line is InvoiceVatLine & { parsedAmount: number; parsedVatRate: number } =>
+        isValidBookingAmount(line.parsedAmount) && Number.isFinite(line.parsedVatRate),
     );
 }
 
 function calculateInvoiceVatLineTotal(lines: InvoiceVatLine[]) {
   return lines.reduce((total, line) => {
-    const amount = Number(line.amount.toString().replace(",", "."));
-    return Number.isFinite(amount) && amount > 0 ? total + amount : total;
+    const amount = parseAmountInput(line.amount);
+    return isValidBookingAmount(amount) ? total + amount : total;
   }, 0);
+}
+
+function getEntryAmountClass(entry: Entry) {
+  const signedAmount = entry.type === "income" ? entry.amount : -entry.amount;
+  return signedAmount >= 0 ? "amount-positive" : "amount-negative";
+}
+
+function formatSignedEntryAmount(entry: Entry) {
+  const signedAmount = entry.type === "income" ? entry.amount : -entry.amount;
+  const prefix = signedAmount >= 0 ? "+" : "-";
+  return `${prefix} ${money.format(Math.abs(signedAmount))}`;
 }
 
 function createInvoiceVatLine(
@@ -526,7 +553,7 @@ type InvoiceAiResult = {
 
 function buildAiInvoiceDraft(file: File, result: InvoiceAiResult): InvoiceDraft {
   const aiVatLines = result.vatLines
-    .filter((line) => line.amountExVat > 0)
+    .filter((line) => line.amountExVat !== 0)
     .map((line) =>
       createInvoiceVatLine(
         line.category || result.category || entryCategories[result.type][0],
@@ -554,7 +581,7 @@ function buildAiInvoiceDraft(file: File, result: InvoiceAiResult): InvoiceDraft 
     relation: result.relation || "",
     type: result.type,
     category: result.category || entryCategories[result.type][0],
-    amount: totalAmount > 0 ? formatDecimalInput(totalAmount) : "",
+    amount: totalAmount !== 0 ? formatDecimalInput(totalAmount) : "",
     vatRate: String(aiVatLines[0]?.vatRate ?? result.vatRate),
     vatLines:
       aiVatLines.length > 0
@@ -562,7 +589,7 @@ function buildAiInvoiceDraft(file: File, result: InvoiceAiResult): InvoiceDraft 
         : [
             createInvoiceVatLine(
               result.category || entryCategories[result.type][0],
-              result.amountExVat > 0 ? formatDecimalInput(result.amountExVat) : "",
+              result.amountExVat !== 0 ? formatDecimalInput(result.amountExVat) : "",
               String(result.vatRate),
             ),
           ],
@@ -1744,12 +1771,12 @@ export default function Home() {
   const enteredAmount =
     entryUsesSplitVatLines
       ? entryVatLinesTotal
-      : Number(entryForm.amount.toString().replace(",", "."));
+      : parseAmountInput(entryForm.amount);
   const investmentVatLinesTotal = entryForm.vatLines
     .filter((line) => line.category === "Investeringen")
     .reduce((total, line) => {
-      const amount = Number(line.amount.toString().replace(",", "."));
-      return Number.isFinite(amount) ? total + amount : total;
+      const amount = parseAmountInput(line.amount);
+      return isValidBookingAmount(amount) ? total + amount : total;
     }, 0);
   const relationSuggestions = active.contacts.filter((contact) =>
     entryForm.type === "income"
@@ -1764,7 +1791,7 @@ export default function Home() {
     showDepreciation &&
     (entryUsesSplitVatLines
       ? investmentVatLinesTotal >= 450
-      : Number.isFinite(enteredAmount) && enteredAmount >= 450);
+      : isValidBookingAmount(enteredAmount) && enteredAmount >= 450);
   const missingSettings = [
     ["Ondernemer", active.owner],
     ["KvK", active.kvk],
@@ -1800,12 +1827,12 @@ export default function Home() {
     salaryTotals.openCount;
   const selectedInvoiceDrafts = invoiceDrafts.filter((draft) => draft.selected);
   const bookableInvoiceDrafts = selectedInvoiceDrafts.filter((draft) => {
-    const amount = Number(draft.amount.toString().replace(",", "."));
+    const amount = parseAmountInput(draft.amount);
     const validVatLines = getValidInvoiceVatLines(draft);
     if (draft.vatLines.length > 1) {
       return draft.description.trim() && validVatLines.length === draft.vatLines.length;
     }
-    return draft.description.trim() && Number.isFinite(amount) && amount > 0;
+    return draft.description.trim() && isValidBookingAmount(amount);
   });
 
   const updateActive = (next: Administration) => {
@@ -1859,7 +1886,7 @@ export default function Home() {
     setEntryForm({
       ...entryForm,
       vatLines,
-      amount: totalAmount > 0 ? formatDecimalInput(totalAmount) : entryForm.amount,
+      amount: totalAmount !== 0 ? formatDecimalInput(totalAmount) : entryForm.amount,
       vatRate: vatLines.length === 1 ? vatLines[0].vatRate : entryForm.vatRate,
       category: vatLines.length === 1 ? vatLines[0].category : entryForm.category,
     });
@@ -1872,13 +1899,13 @@ export default function Home() {
     setEntryForm({
       ...entryForm,
       vatLines,
-      amount: totalAmount > 0 ? formatDecimalInput(totalAmount) : entryForm.amount,
+      amount: totalAmount !== 0 ? formatDecimalInput(totalAmount) : entryForm.amount,
     });
   };
 
   const addEntry = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const amount = Number(entryForm.amount.toString().replace(",", "."));
+    const amount = parseAmountInput(entryForm.amount);
     const validVatLines = getValidInvoiceVatLines({
       ...entryForm,
       id: "entry-form",
@@ -1896,7 +1923,7 @@ export default function Home() {
       !entryForm.description.trim() ||
       (entryUsesSplitVatLines
         ? validVatLines.length !== entryForm.vatLines.length
-        : !Number.isFinite(amount) || amount <= 0)
+        : !isValidBookingAmount(amount))
     ) {
       return;
     }
@@ -1943,6 +1970,8 @@ export default function Home() {
       });
       return;
     }
+
+    if (!isValidBookingAmount(amount)) return;
 
     const depreciationYears =
       entryForm.type === "expense" &&
@@ -2149,7 +2178,7 @@ export default function Home() {
         return {
           ...draft,
           vatLines,
-          amount: totalAmount > 0 ? formatDecimalInput(totalAmount) : draft.amount,
+          amount: totalAmount !== 0 ? formatDecimalInput(totalAmount) : draft.amount,
           vatRate: vatLines.length === 1 ? vatLines[0].vatRate : draft.vatRate,
           category: vatLines.length === 1 ? vatLines[0].category : draft.category,
         };
@@ -2166,7 +2195,7 @@ export default function Home() {
         return {
           ...draft,
           vatLines,
-          amount: totalAmount > 0 ? formatDecimalInput(totalAmount) : draft.amount,
+          amount: totalAmount !== 0 ? formatDecimalInput(totalAmount) : draft.amount,
         };
       }),
     );
@@ -2188,6 +2217,7 @@ export default function Home() {
     }
 
     const entries: Entry[] = bookableInvoiceDrafts.flatMap((draft) => {
+      const draftAmount = parseAmountInput(draft.amount);
       const splitLines =
         draft.vatLines.length > 1
           ? getValidInvoiceVatLines(draft)
@@ -2209,6 +2239,8 @@ export default function Home() {
         }));
       }
 
+      if (!isValidBookingAmount(draftAmount)) return [];
+
       return [
         {
           id: uid(),
@@ -2218,7 +2250,7 @@ export default function Home() {
           relation: draft.relation.trim() || "Onbekende relatie",
           category: draft.category || entryCategories[draft.type][0],
           type: draft.type,
-          amount: Number(draft.amount.toString().replace(",", ".")),
+          amount: draftAmount,
           vatRate: Number(draft.vatRate),
           status: draft.status,
           paidDate: draft.status === "paid" ? draft.paidDate || draft.date || today : undefined,
@@ -4385,9 +4417,7 @@ function CompactEntries({ entries }: { entries: Entry[] }) {
               {entry.date} · {entry.invoiceNumber ? `Factuur ${entry.invoiceNumber} · ` : ""}{entry.description}
             </span>
           </div>
-          <span className={entry.type === "income" ? "amount-positive" : "amount-negative"}>
-            {entry.type === "income" ? "+" : "-"} {money.format(entry.amount)}
-          </span>
+          <span className={getEntryAmountClass(entry)}>{formatSignedEntryAmount(entry)}</span>
         </div>
       ))}
     </div>
@@ -4580,13 +4610,13 @@ function InvoiceImportPanel({
 
       <section className="grid gap-4">
         {drafts.map((draft) => {
-          const amount = Number(draft.amount.toString().replace(",", "."));
+          const amount = parseAmountInput(draft.amount);
           const validVatLines = getValidInvoiceVatLines(draft);
           const splitTotal = calculateInvoiceVatLineTotal(draft.vatLines);
           const usesSplitLines = draft.vatLines.length > 1;
           const isBookable = usesSplitLines
             ? draft.description.trim() && validVatLines.length === draft.vatLines.length
-            : draft.description.trim() && Number.isFinite(amount) && amount > 0;
+            : draft.description.trim() && isValidBookingAmount(amount);
 
           return (
             <article className="invoice-draft-card" key={draft.id}>
