@@ -71,6 +71,16 @@ function extractOutputText(data: unknown) {
   return "";
 }
 
+function extractOpenAiError(data: unknown) {
+  const record = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+  const error = record.error && typeof record.error === "object"
+    ? (record.error as Record<string, unknown>)
+    : null;
+  if (error && typeof error.message === "string") return error.message;
+  if (typeof record.message === "string") return record.message;
+  return "";
+}
+
 function roundCents(value: number) {
   return Math.round(value * 100) / 100;
 }
@@ -285,7 +295,7 @@ function normalizeAnalysis(value: unknown, administrationJson: string): InvoiceA
 
 export async function POST(request: NextRequest) {
   const apiKey = process.env.OPENAI_API_KEY;
-  const model = process.env.OPENAI_INVOICE_MODEL || "gpt-4.1-mini";
+  const model = process.env.OPENAI_INVOICE_MODEL || "gpt-4.1";
 
   if (!apiKey) {
     return NextResponse.json(
@@ -359,6 +369,7 @@ export async function POST(request: NextRequest) {
               type: "input_file",
               filename: file.name,
               file_data: fileData,
+              detail: "high",
             },
           ],
         },
@@ -436,8 +447,14 @@ export async function POST(request: NextRequest) {
   const data = (await response.json()) as unknown;
 
   if (!response.ok) {
+    const detail = extractOpenAiError(data);
     return NextResponse.json(
-      { error: "OpenAI kon deze factuur nu niet herkennen.", details: data },
+      {
+        error: detail
+          ? `OpenAI kon deze factuur nu niet herkennen: ${detail}`
+          : "OpenAI kon deze factuur nu niet herkennen.",
+        details: data,
+      },
       { status: response.status },
     );
   }

@@ -2030,7 +2030,8 @@ export default function Home() {
           return draft;
         } catch (error) {
           fallbackCount += 1;
-          if (error instanceof Error) fallbackMessages.add(error.message);
+          const errorMessage = error instanceof Error ? error.message : "AI-herkenning mislukt.";
+          fallbackMessages.add(errorMessage);
           const sourceText = await readInvoiceFileText(file);
           const draft = buildInvoiceDraft(file, sourceText, active.contacts);
           if (!sourceText && (file.type === "application/pdf" || /\.pdf$/i.test(file.name))) {
@@ -2041,10 +2042,13 @@ export default function Home() {
               amount: "",
               vatLines: [createInvoiceVatLine(draft.category, "", draft.vatRate)],
               note:
-                "Deze PDF kon zonder AI niet veilig worden gelezen. Vul de velden handmatig in of controleer de OpenAI-sleutel in Cloudflare.",
+                `Deze PDF kon zonder AI niet veilig worden gelezen. AI-fout: ${errorMessage}`,
             };
           }
-          return draft;
+          return {
+            ...draft,
+            note: `${draft.note} AI-fout: ${errorMessage}`,
+          };
         }
       }),
     );
