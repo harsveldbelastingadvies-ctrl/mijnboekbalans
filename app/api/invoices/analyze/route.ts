@@ -8,6 +8,12 @@ type InvoiceAnalysis = {
   date: string;
   description: string;
   relation: string;
+  supplierName: string;
+  supplierKvk: string;
+  supplierVatNumber: string;
+  customerName: string;
+  customerKvk: string;
+  customerVatNumber: string;
   type: "income" | "expense";
   category: string;
   amountExVat: number;
@@ -69,9 +75,79 @@ function roundCents(value: number) {
   return Math.round(value * 100) / 100;
 }
 
-function normalizeAnalysis(value: unknown): InvoiceAnalysis {
+function normalizeSearchText(value: string) {
+  return value
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function normalizeId(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function getString(data: Record<string, unknown>, key: string) {
+  const value = data[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function parseRecord(value: string) {
+  try {
+    const data = JSON.parse(value) as unknown;
+    return data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function hasStrongIdentifierMatch(partyValues: string[], administration: Record<string, unknown>) {
+  const adminIds = ["kvk", "vatNumber"]
+    .map((key) => normalizeId(getString(administration, key)))
+    .filter((value) => value.length >= 6);
+  const partyIds = partyValues
+    .map((value) => normalizeId(value))
+    .filter((value) => value.length >= 6);
+
+  return partyIds.some((partyId) =>
+    adminIds.some((adminId) => partyId.includes(adminId) || adminId.includes(partyId)),
+  );
+}
+
+function hasNameMatch(partyName: string, administration: Record<string, unknown>) {
+  const party = normalizeSearchText(partyName);
+  if (!party) return false;
+
+  return ["name", "owner"]
+    .map((key) => normalizeSearchText(getString(administration, key)))
+    .filter((value) => value.length >= 5)
+    .some((adminName) => party.includes(adminName) || adminName.includes(party));
+}
+
+function normalizeAnalysis(value: unknown, administrationJson: string): InvoiceAnalysis {
   const data = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-  const type = data.type === "income" ? "income" : "expense";
+  const administration = parseRecord(administrationJson);
+  const supplierName = getString(data, "supplierName");
+  const supplierKvk = getString(data, "supplierKvk");
+  const supplierVatNumber = getString(data, "supplierVatNumber");
+  const customerName = getString(data, "customerName");
+  const customerKvk = getString(data, "customerKvk");
+  const customerVatNumber = getString(data, "customerVatNumber");
+  const supplierIsOwnAdministration =
+    hasStrongIdentifierMatch([supplierKvk, supplierVatNumber], administration) ||
+    hasNameMatch(supplierName, administration);
+  const customerIsOwnAdministration =
+    hasStrongIdentifierMatch([customerKvk, customerVatNumber], administration) ||
+    hasNameMatch(customerName, administration);
+  const type =
+    supplierIsOwnAdministration && !customerIsOwnAdministration
+      ? "income"
+      : customerIsOwnAdministration && !supplierIsOwnAdministration
+        ? "expense"
+        : data.type === "income"
+          ? "income"
+          : "expense";
   const rawVatRate = Number(data.vatRate);
   const vatRate = rawVatRate === 9 || rawVatRate === 0 ? rawVatRate : 21;
   const rawAmountExVat = Number(data.amountExVat);
@@ -79,6 +155,33 @@ function normalizeAnalysis(value: unknown): InvoiceAnalysis {
   const rawAmountInclVat = Number(data.amountInclVat);
   const confidence = Math.min(98, Math.max(0, Number(data.confidence) || 55));
   const rawVatLines = Array.isArray(data.vatLines) ? data.vatLines : [];
+  const rawCategory = getString(data, "category");
+  const incomeCategories = ["Omzet diensten", "Omzet producten", "Abonnementen", "Overige inkomsten"];
+  const expenseCategories = [
+    "Inkoop",
+    "Uitbesteed werk",
+    "Investeringen",
+    "Software",
+    "Kantoorkosten",
+    "Auto- en transportkosten",
+    "Huisvestingskosten",
+    "Reiskosten",
+    "Marketing",
+    "Administratiekosten",
+    "Bankkosten",
+    "Representatiekosten",
+    "Telefoonkosten",
+    "Verzekeringen",
+    "Overige kosten",
+  ];
+  const category =
+    type === "income"
+      ? incomeCategories.includes(rawCategory)
+        ? rawCategory
+        : "Omzet diensten"
+      : expenseCategories.includes(rawCategory)
+        ? rawCategory
+        : "Inkoop";
   const vatLines = rawVatLines
     .map((line) => {
       const record = line && typeof line === "object" ? (line as Record<string, unknown>) : {};
@@ -145,14 +248,18 @@ function normalizeAnalysis(value: unknown): InvoiceAnalysis {
       typeof data.description === "string" && data.description.trim()
         ? data.description.trim()
         : "Factuur",
-    relation: typeof data.relation === "string" ? data.relation.trim() : "",
+    relation:
+      type === "income"
+        ? customerName || getString(data, "relation")
+        : supplierName || getString(data, "relation"),
+    supplierName,
+    supplierKvk,
+    supplierVatNumber,
+    customerName,
+    customerKvk,
+    customerVatNumber,
     type,
-    category:
-      typeof data.category === "string" && data.category.trim()
-        ? data.category.trim()
-        : type === "income"
-          ? "Omzet diensten"
-          : "Inkoop",
+    category,
     amountExVat,
     amountVat,
     amountInclVat,
@@ -167,8 +274,8 @@ function normalizeAnalysis(value: unknown): InvoiceAnalysis {
               vatRate,
             },
           ],
-    status: data.status === "open" ? "open" : "paid",
-    confidence,
+    status: type === "income" ? "open" : data.status === "open" ? "open" : "paid",
+    confidence: supplierIsOwnAdministration || customerIsOwnAdministration ? Math.max(confidence, 88) : confidence,
     note:
       typeof data.note === "string" && data.note.trim()
         ? data.note.trim()
@@ -220,9 +327,11 @@ export async function POST(request: NextRequest) {
     "Geef uitsluitend gegevens terug die nodig zijn om een boeking in BoekBalans voor te stellen.",
     "Let strikt op bedragen: amountExVat is de grondslag exclusief btw, amountVat is alleen het btw-bedrag, amountInclVat is het totaal inclusief btw.",
     "Gebruik NOOIT het totaal inclusief btw als amountExVat. Als alleen inclusief btw zichtbaar is, reken amountExVat terug met het gekozen btw-tarief.",
-    "Bij een verkoopfactuur is relation de klant/afnemer aan wie is gefactureerd, niet de afzender/leverancier van de factuur.",
-    "Bij een inkoopfactuur of bon is relation de leverancier.",
+    "Vul supplierName/supplierKvk/supplierVatNumber met de afzender/leverancier van de factuur.",
+    "Vul customerName/customerKvk/customerVatNumber met de afnemer/klant aan wie is gefactureerd.",
+    "Bij een verkoopfactuur is relation gelijk aan customerName. Bij een inkoopfactuur of bon is relation gelijk aan supplierName.",
     "Bepaal verkoop versus inkoop vanuit de eigen administratie hieronder. Als de afzender overeenkomt met de eigen administratie, is het een verkoopfactuur.",
+    "Als de afnemer overeenkomt met de eigen administratie, is het een inkoopfactuur.",
     "Kies type 'income' voor verkoopfacturen en 'expense' voor inkoopfacturen of bonnetjes.",
     "Kies category bij income uit: Omzet diensten, Omzet producten, Abonnementen, Overige inkomsten.",
     "Kies category bij expense uit: Inkoop, Uitbesteed werk, Investeringen, Software, Kantoorkosten, Auto- en transportkosten, Huisvestingskosten, Reiskosten, Marketing, Administratiekosten, Bankkosten, Representatiekosten, Telefoonkosten, Verzekeringen, Overige kosten.",
@@ -267,6 +376,12 @@ export async function POST(request: NextRequest) {
               date: { type: "string", description: "Datum als YYYY-MM-DD" },
               description: { type: "string" },
               relation: { type: "string" },
+              supplierName: { type: "string" },
+              supplierKvk: { type: "string" },
+              supplierVatNumber: { type: "string" },
+              customerName: { type: "string" },
+              customerKvk: { type: "string" },
+              customerVatNumber: { type: "string" },
               type: { type: "string", enum: ["income", "expense"] },
               category: { type: "string" },
               amountExVat: { type: "number" },
@@ -295,6 +410,12 @@ export async function POST(request: NextRequest) {
               "date",
               "description",
               "relation",
+              "supplierName",
+              "supplierKvk",
+              "supplierVatNumber",
+              "customerName",
+              "customerKvk",
+              "customerVatNumber",
               "type",
               "category",
               "amountExVat",
@@ -330,7 +451,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    return NextResponse.json({ result: normalizeAnalysis(JSON.parse(outputText)) });
+    return NextResponse.json({ result: normalizeAnalysis(JSON.parse(outputText), administration) });
   } catch {
     return NextResponse.json(
       { error: "OpenAI gaf geen geldig JSON-factuurvoorstel terug." },
