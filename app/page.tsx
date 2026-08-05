@@ -193,6 +193,24 @@ const zvwContributionOptions: Array<{ value: ZvwContributionType; label: string 
   },
 ];
 
+const laborTaxCreditByYear: Record<
+  number,
+  Array<{ max: number; base: number; rate: number; excessFrom: number }>
+> = {
+  2026: [
+    { max: 11965, base: 0, rate: 0.08324, excessFrom: 0 },
+    { max: 25845, base: 996, rate: 0.31009, excessFrom: 11965 },
+    { max: 45592, base: 5300, rate: 0.0195, excessFrom: 25845 },
+    { max: 132920, base: 5685, rate: -0.0651, excessFrom: 45592 },
+  ],
+  2025: [
+    { max: 12169, base: 0, rate: 0.08053, excessFrom: 0 },
+    { max: 26288, base: 980, rate: 0.3003, excessFrom: 12169 },
+    { max: 43071, base: 5220, rate: 0.02258, excessFrom: 26288 },
+    { max: 129078, base: 5599, rate: -0.0651, excessFrom: 43071 },
+  ],
+};
+
 const today = new Date().toISOString().slice(0, 10);
 
 const entryCategories: Record<EntryType, string[]> = {
@@ -959,6 +977,46 @@ function getSalariesZvwLabel(salaries: SalaryRecord[], fiscalYear: number) {
   return "Zvw totaal";
 }
 
+function calculateLaborTaxCredit(annualGrossSalary: number, fiscalYear: number) {
+  const year = laborTaxCreditByYear[fiscalYear] ? fiscalYear : 2026;
+  const brackets = laborTaxCreditByYear[year];
+  if (!Number.isFinite(annualGrossSalary) || annualGrossSalary <= 0) return 0;
+
+  const bracket = brackets.find((item) => annualGrossSalary <= item.max);
+  if (!bracket) return 0;
+
+  return Math.max(0, Math.round(bracket.base + (annualGrossSalary - bracket.excessFrom) * bracket.rate));
+}
+
+function calculateMonthlyLaborTaxCredit(grossMonthlySalary: number, fiscalYear: number) {
+  if (!Number.isFinite(grossMonthlySalary) || grossMonthlySalary <= 0) return 0;
+  return roundCents(calculateLaborTaxCredit(grossMonthlySalary * 12, fiscalYear) / 12);
+}
+
+function getSalaryLaborTaxCredit(salary: SalaryRecord, fallbackFiscalYear: number) {
+  return calculateMonthlyLaborTaxCredit(
+    salary.grossSalary,
+    getSalaryYear(salary.period) || fallbackFiscalYear,
+  );
+}
+
+function getCumulativeSalaryLaborTaxCredit(
+  admin: Administration,
+  salary: SalaryRecord,
+  salaries: SalaryRecord[],
+) {
+  const salaryYear = getSalaryYear(salary.period) || admin.fiscalYear;
+  const employeeName = getSalaryEmployeeName(admin, salary);
+  return salaries
+    .filter((item) => {
+      const sameEmployee = salary.employeeId
+        ? item.employeeId === salary.employeeId
+        : getSalaryEmployeeName(admin, item) === employeeName;
+      return sameEmployee && getSalaryYear(item.period) === salaryYear && item.period <= salary.period;
+    })
+    .reduce((total, item) => total + getSalaryLaborTaxCredit(item, admin.fiscalYear), 0);
+}
+
 function calculateSalaryTotals(salaries: SalaryRecord[], fiscalYear: number) {
   return salaries.reduce(
     (acc, salary) => {
@@ -966,6 +1024,7 @@ function calculateSalaryTotals(salaries: SalaryRecord[], fiscalYear: number) {
       acc.wageTax += salary.wageTax;
       acc.netSalary += salary.netSalary;
       acc.employerHealthContribution += getSalaryZvwContribution(salary, fiscalYear);
+      acc.laborTaxCredit += getSalaryLaborTaxCredit(salary, fiscalYear);
       if (salary.status === "open") acc.openCount += 1;
       return acc;
     },
@@ -974,32 +1033,10 @@ function calculateSalaryTotals(salaries: SalaryRecord[], fiscalYear: number) {
       wageTax: 0,
       netSalary: 0,
       employerHealthContribution: 0,
+      laborTaxCredit: 0,
       openCount: 0,
     },
   );
-}
-
-function calculateLaborTaxCredit(annualGrossSalary: number, fiscalYear: number) {
-  const supportedYear = fiscalYear >= 2025 ? 2025 : fiscalYear;
-  if (supportedYear !== 2025 || annualGrossSalary <= 0) return 0;
-
-  if (annualGrossSalary <= 12169) {
-    return Math.round(annualGrossSalary * 0.08053);
-  }
-
-  if (annualGrossSalary <= 26288) {
-    return Math.round(980 + (annualGrossSalary - 12169) * 0.3003);
-  }
-
-  if (annualGrossSalary <= 43071) {
-    return Math.round(5220 + (annualGrossSalary - 26288) * 0.02258);
-  }
-
-  if (annualGrossSalary <= 129078) {
-    return Math.max(0, Math.round(5599 - (annualGrossSalary - 43071) * 0.0651));
-  }
-
-  return 0;
 }
 
 function contactTypeLabel(type: Contact["type"]) {
@@ -1594,11 +1631,17 @@ function buildContactsPdf(admin: Administration) {
   ]);
 }
 
-function buildPayslipPdf(admin: Administration, salary: SalaryRecord) {
+function buildPayslipPdf(admin: Administration, salary: SalaryRecord, fiscalYearSalaries: SalaryRecord[]) {
   const employeeName = getSalaryEmployeeName(admin, salary);
   const employeeBirthDate = getSalaryEmployeeBirthDate(admin, salary);
   const employeeAddress = getSalaryEmployeeAddress(admin, salary);
   const zvwLabel = getSalaryZvwLabel(salary, admin.fiscalYear);
+  const laborTaxCredit = getSalaryLaborTaxCredit(salary, admin.fiscalYear);
+  const cumulativeLaborTaxCredit = getCumulativeSalaryLaborTaxCredit(
+    admin,
+    salary,
+    fiscalYearSalaries,
+  );
 
   return buildTablePdf(admin, "Loonstrook", getSalaryMonthLabel(salary.period), [
     {
@@ -1632,6 +1675,8 @@ function buildPayslipPdf(admin: Administration, salary: SalaryRecord) {
       rows: [
         ["Brutoloon", money.format(salary.grossSalary)],
         ["Loonheffing", money.format(salary.wageTax)],
+        ["Arbeidskorting toegepast", money.format(laborTaxCredit)],
+        ["Arbeidskorting cumulatief", money.format(cumulativeLaborTaxCredit)],
         ["Netto uit te betalen", money.format(salary.netSalary)],
         [zvwLabel, money.format(getSalaryZvwContribution(salary, admin.fiscalYear))],
       ],
@@ -1645,7 +1690,6 @@ function buildAnnualIncomeStatementPdf(
   salaries: SalaryRecord[],
 ) {
   const totals = calculateSalaryTotals(salaries, admin.fiscalYear);
-  const laborTaxCredit = calculateLaborTaxCredit(totals.grossSalary, admin.fiscalYear);
   const zvwLabel = getSalariesZvwLabel(salaries, admin.fiscalYear);
   const firstSalary = salaries[0];
   const employee = firstSalary ? getSalaryEmployee(admin, firstSalary) : null;
@@ -1671,7 +1715,7 @@ function buildAnnualIncomeStatementPdf(
       rows: [
         ["Fiscaal loon / brutoloon", money.format(totals.grossSalary)],
         ["Ingehouden loonheffing", money.format(totals.wageTax)],
-        ["Verrekende arbeidskorting", money.format(laborTaxCredit)],
+        ["Verrekende arbeidskorting", money.format(totals.laborTaxCredit)],
         ["Netto uitbetaald", money.format(totals.netSalary)],
         [zvwLabel, money.format(totals.employerHealthContribution)],
       ],
@@ -2820,7 +2864,7 @@ export default function Home() {
   const downloadPayslip = (salary: SalaryRecord) => {
     downloadBlob(
       `${administrationFileBase}-${salary.period}-loonstrook-${safeFileName(salary.employeeName)}.pdf`,
-      buildPayslipPdf(active, salary),
+      buildPayslipPdf(active, salary, fiscalYearSalaries),
     );
   };
 
@@ -3390,9 +3434,10 @@ export default function Home() {
 
           {tab === "payroll" && (
             <div className="mt-6 grid gap-5">
-              <div className="grid gap-3 md:grid-cols-5">
+              <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
                 <Metric label="Brutoloon" value={money.format(salaryTotals.grossSalary)} accent="teal" />
                 <Metric label="Loonheffing" value={money.format(salaryTotals.wageTax)} accent="coral" />
+                <Metric label="Arbeidskorting" value={money.format(salaryTotals.laborTaxCredit)} accent="blue" />
                 <Metric label="Netto loon" value={money.format(salaryTotals.netSalary)} accent="blue" />
                 <Metric label="Zvw totaal" value={money.format(salaryTotals.employerHealthContribution)} accent="teal" />
                 <Metric label="Open salarissen" value={String(salaryTotals.openCount)} accent="yellow" />
