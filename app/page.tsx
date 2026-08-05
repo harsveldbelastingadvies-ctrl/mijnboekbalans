@@ -12,6 +12,7 @@ import {
 
 type EntryType = "income" | "expense";
 type EntryStatus = "paid" | "open";
+type ZvwContributionType = "dga_contribution" | "employer_levy";
 type TabKey =
   | "overview"
   | "entries"
@@ -59,6 +60,7 @@ type SalaryRecord = {
   wageTax: number;
   netSalary: number;
   employerHealthContribution: number;
+  zvwContributionType?: ZvwContributionType;
   status: EntryStatus;
   paymentDate: string;
 };
@@ -160,6 +162,37 @@ const money = new Intl.NumberFormat("nl-NL", {
   currency: "EUR",
 });
 
+const zvwContributionByYear: Record<
+  number,
+  Record<ZvwContributionType, { rate: number; maxAnnualIncome: number; label: string; shortLabel: string }>
+> = {
+  2026: {
+    dga_contribution: {
+      rate: 0.0485,
+      maxAnnualIncome: 79409,
+      label: "DGA niet verzekerd werknemersverzekeringen - bijdrage Zvw",
+      shortLabel: "Bijdrage Zvw DGA",
+    },
+    employer_levy: {
+      rate: 0.061,
+      maxAnnualIncome: 79409,
+      label: "DGA verzekerd / werknemer - werkgeversheffing Zvw",
+      shortLabel: "Werkgeversheffing Zvw",
+    },
+  },
+};
+
+const zvwContributionOptions: Array<{ value: ZvwContributionType; label: string }> = [
+  {
+    value: "dga_contribution",
+    label: "DGA niet verzekerd - bijdrage Zvw",
+  },
+  {
+    value: "employer_levy",
+    label: "DGA verzekerd / werknemer - werkgeversheffing Zvw",
+  },
+];
+
 const today = new Date().toISOString().slice(0, 10);
 
 const entryCategories: Record<EntryType, string[]> = {
@@ -222,7 +255,8 @@ const starterData: Administration[] = [
         grossSalary: 4200,
         wageTax: 1460,
         netSalary: 2740,
-        employerHealthContribution: 290,
+        employerHealthContribution: 203.7,
+        zvwContributionType: "dga_contribution",
         status: "open",
         paymentDate: "2026-07-25",
       },
@@ -314,6 +348,7 @@ const emptySalary = {
   wageTax: "",
   netSalary: "",
   employerHealthContribution: "",
+  zvwContributionType: "dga_contribution" as ZvwContributionType,
   status: "open" as EntryStatus,
   paymentDate: today,
 };
@@ -347,6 +382,42 @@ function parseDecimal(value: string) {
 
 function formatDecimalInput(value: number) {
   return value.toFixed(2).replace(".", ",");
+}
+
+function roundCents(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+function normalizeZvwContributionType(value: unknown): ZvwContributionType {
+  return value === "employer_levy" ? "employer_levy" : "dga_contribution";
+}
+
+function getZvwContributionSettings(fiscalYear: number, type: ZvwContributionType) {
+  const yearSettings = zvwContributionByYear[fiscalYear] ?? zvwContributionByYear[2026];
+  return yearSettings[type];
+}
+
+function calculateZvwContribution(
+  grossMonthlySalary: number,
+  fiscalYear: number,
+  type: ZvwContributionType,
+) {
+  const settings = getZvwContributionSettings(fiscalYear, type);
+  if (!Number.isFinite(grossMonthlySalary) || grossMonthlySalary <= 0) return 0;
+  const monthlyMaximum = settings.maxAnnualIncome / 12;
+  return roundCents(Math.min(grossMonthlySalary, monthlyMaximum) * settings.rate);
+}
+
+function getZvwRateLabel(fiscalYear: number, type: ZvwContributionType) {
+  const settings = getZvwContributionSettings(fiscalYear, type);
+  return `${(settings.rate * 100).toLocaleString("nl-NL", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}%`;
+}
+
+function getZvwShortLabel(type: ZvwContributionType) {
+  return getZvwContributionSettings(2026, type).shortLabel;
 }
 
 function isValidBookingAmount(value: number | null): value is number {
@@ -869,13 +940,32 @@ function filterSalariesByYear(salaries: SalaryRecord[], fiscalYear: number) {
   return salaries.filter((salary) => getSalaryYear(salary.period) === fiscalYear);
 }
 
-function calculateSalaryTotals(salaries: SalaryRecord[]) {
+function getSalaryZvwContribution(salary: SalaryRecord, fallbackFiscalYear: number) {
+  return calculateZvwContribution(
+    salary.grossSalary,
+    getSalaryYear(salary.period) || fallbackFiscalYear,
+    normalizeZvwContributionType(salary.zvwContributionType),
+  );
+}
+
+function getSalaryZvwLabel(salary: SalaryRecord, fallbackFiscalYear: number) {
+  const type = normalizeZvwContributionType(salary.zvwContributionType);
+  return `${getZvwShortLabel(type)} (${getZvwRateLabel(getSalaryYear(salary.period) || fallbackFiscalYear, type)})`;
+}
+
+function getSalariesZvwLabel(salaries: SalaryRecord[], fiscalYear: number) {
+  const types = new Set(salaries.map((salary) => normalizeZvwContributionType(salary.zvwContributionType)));
+  if (types.size === 1 && salaries[0]) return getSalaryZvwLabel(salaries[0], fiscalYear);
+  return "Zvw totaal";
+}
+
+function calculateSalaryTotals(salaries: SalaryRecord[], fiscalYear: number) {
   return salaries.reduce(
     (acc, salary) => {
       acc.grossSalary += salary.grossSalary;
       acc.wageTax += salary.wageTax;
       acc.netSalary += salary.netSalary;
-      acc.employerHealthContribution += salary.employerHealthContribution;
+      acc.employerHealthContribution += getSalaryZvwContribution(salary, fiscalYear);
       if (salary.status === "open") acc.openCount += 1;
       return acc;
     },
@@ -1508,6 +1598,7 @@ function buildPayslipPdf(admin: Administration, salary: SalaryRecord) {
   const employeeName = getSalaryEmployeeName(admin, salary);
   const employeeBirthDate = getSalaryEmployeeBirthDate(admin, salary);
   const employeeAddress = getSalaryEmployeeAddress(admin, salary);
+  const zvwLabel = getSalaryZvwLabel(salary, admin.fiscalYear);
 
   return buildTablePdf(admin, "Loonstrook", getSalaryMonthLabel(salary.period), [
     {
@@ -1542,7 +1633,7 @@ function buildPayslipPdf(admin: Administration, salary: SalaryRecord) {
         ["Brutoloon", money.format(salary.grossSalary)],
         ["Loonheffing", money.format(salary.wageTax)],
         ["Netto uit te betalen", money.format(salary.netSalary)],
-        ["Werkgeversbijdrage Zvw", money.format(salary.employerHealthContribution)],
+        [zvwLabel, money.format(getSalaryZvwContribution(salary, admin.fiscalYear))],
       ],
     },
   ]);
@@ -1553,8 +1644,9 @@ function buildAnnualIncomeStatementPdf(
   employeeName: string,
   salaries: SalaryRecord[],
 ) {
-  const totals = calculateSalaryTotals(salaries);
+  const totals = calculateSalaryTotals(salaries, admin.fiscalYear);
   const laborTaxCredit = calculateLaborTaxCredit(totals.grossSalary, admin.fiscalYear);
+  const zvwLabel = getSalariesZvwLabel(salaries, admin.fiscalYear);
   const firstSalary = salaries[0];
   const employee = firstSalary ? getSalaryEmployee(admin, firstSalary) : null;
   return buildTablePdf(admin, "Jaaropgave", String(admin.fiscalYear), [
@@ -1581,7 +1673,7 @@ function buildAnnualIncomeStatementPdf(
         ["Ingehouden loonheffing", money.format(totals.wageTax)],
         ["Verrekende arbeidskorting", money.format(laborTaxCredit)],
         ["Netto uitbetaald", money.format(totals.netSalary)],
-        ["Werkgeversbijdrage Zvw", money.format(totals.employerHealthContribution)],
+        [zvwLabel, money.format(totals.employerHealthContribution)],
       ],
     },
   ]);
@@ -1591,14 +1683,15 @@ function buildPayrollOverviewPdf(admin: Administration, salaries: SalaryRecord[]
   return buildTablePdf(admin, "Salarisoverzicht", String(admin.fiscalYear), [
     {
       title: "Salarisregels",
-      headers: ["Periode", "Werknemer", "Bruto", "Loonheffing", "Netto", "Status"],
-      widths: [78, 145, 74, 82, 74, 58],
+      headers: ["Periode", "Werknemer", "Bruto", "Loonheffing", "Netto", "Zvw", "Status"],
+      widths: [70, 120, 68, 78, 68, 62, 45],
       rows: salaries.map((salary) => [
         getSalaryMonthLabel(salary.period),
         getSalaryEmployeeName(admin, salary),
         money.format(salary.grossSalary),
         money.format(salary.wageTax),
         money.format(salary.netSalary),
+        money.format(getSalaryZvwContribution(salary, admin.fiscalYear)),
         salary.status === "paid" ? "Betaald" : "Open",
       ]),
       emptyText: "Nog geen salarisregels voor dit boekjaar.",
@@ -1721,8 +1814,8 @@ export default function Home() {
     [activeSalaries, active.fiscalYear],
   );
   const salaryTotals = useMemo(
-    () => calculateSalaryTotals(fiscalYearSalaries),
-    [fiscalYearSalaries],
+    () => calculateSalaryTotals(fiscalYearSalaries, active.fiscalYear),
+    [fiscalYearSalaries, active.fiscalYear],
   );
   const salaryEmployeeGroups = useMemo(
     () =>
@@ -1739,6 +1832,26 @@ export default function Home() {
       ).map(([, group]) => group),
     [active, fiscalYearSalaries],
   );
+  const salaryFormGrossSalary = parseDecimal(salaryForm.grossSalary);
+  const salaryFormFiscalYear = getSalaryYear(salaryForm.period) || active.fiscalYear;
+  const salaryFormZvwContributionType = normalizeZvwContributionType(salaryForm.zvwContributionType);
+  const salaryFormZvwContribution =
+    salaryFormGrossSalary !== null
+      ? calculateZvwContribution(
+          salaryFormGrossSalary,
+          salaryFormFiscalYear,
+          salaryFormZvwContributionType,
+        )
+      : 0;
+  const salaryFormZvwContributionValue =
+    salaryForm.grossSalary.trim() && salaryFormGrossSalary !== null
+      ? formatDecimalInput(salaryFormZvwContribution)
+      : "";
+  const salaryFormZvwRateLabel = getZvwRateLabel(
+    salaryFormFiscalYear,
+    salaryFormZvwContributionType,
+  );
+  const salaryFormZvwShortLabel = getZvwShortLabel(salaryFormZvwContributionType);
   const filteredEntries = useMemo(
     () => filterEntriesByPeriod(active.entries, active.fiscalYear, period),
     [active.entries, active.fiscalYear, period],
@@ -2339,18 +2452,17 @@ export default function Home() {
     const selectedEmployee = activePayrollEmployees.find(
       (employee) => employee.id === salaryForm.employeeId,
     );
-    const grossSalary = Number(salaryForm.grossSalary.toString().replace(",", "."));
-    const wageTax = Number(salaryForm.wageTax.toString().replace(",", "."));
-    const netSalary = Number(salaryForm.netSalary.toString().replace(",", "."));
-    const employerHealthContribution = Number(
-      salaryForm.employerHealthContribution.toString().replace(",", "."),
-    );
+    const grossSalary = parseDecimal(salaryForm.grossSalary);
+    const wageTax = parseDecimal(salaryForm.wageTax);
+    const netSalary = parseDecimal(salaryForm.netSalary);
+    const salaryYear = getSalaryYear(salaryForm.period) || active.fiscalYear;
+    const zvwContributionType = normalizeZvwContributionType(salaryForm.zvwContributionType);
     if (
       !(selectedEmployee || salaryForm.employeeName.trim()) ||
       !salaryForm.period ||
-      !Number.isFinite(grossSalary) ||
-      !Number.isFinite(wageTax) ||
-      !Number.isFinite(netSalary)
+      grossSalary === null ||
+      wageTax === null ||
+      netSalary === null
     ) {
       return;
     }
@@ -2363,9 +2475,8 @@ export default function Home() {
       grossSalary,
       wageTax,
       netSalary,
-      employerHealthContribution: Number.isFinite(employerHealthContribution)
-        ? employerHealthContribution
-        : 0,
+      employerHealthContribution: calculateZvwContribution(grossSalary, salaryYear, zvwContributionType),
+      zvwContributionType,
       status: salaryForm.status,
       paymentDate: salaryForm.paymentDate,
     };
@@ -2389,6 +2500,7 @@ export default function Home() {
       wageTax: String(salary.wageTax).replace(".", ","),
       netSalary: String(salary.netSalary).replace(".", ","),
       employerHealthContribution: String(salary.employerHealthContribution).replace(".", ","),
+      zvwContributionType: normalizeZvwContributionType(salary.zvwContributionType),
       status: salary.status,
       paymentDate: salary.paymentDate,
     });
@@ -3278,10 +3390,11 @@ export default function Home() {
 
           {tab === "payroll" && (
             <div className="mt-6 grid gap-5">
-              <div className="grid gap-3 md:grid-cols-4">
+              <div className="grid gap-3 md:grid-cols-5">
                 <Metric label="Brutoloon" value={money.format(salaryTotals.grossSalary)} accent="teal" />
                 <Metric label="Loonheffing" value={money.format(salaryTotals.wageTax)} accent="coral" />
                 <Metric label="Netto loon" value={money.format(salaryTotals.netSalary)} accent="blue" />
+                <Metric label="Zvw totaal" value={money.format(salaryTotals.employerHealthContribution)} accent="teal" />
                 <Metric label="Open salarissen" value={String(salaryTotals.openCount)} accent="yellow" />
               </div>
 
@@ -3436,6 +3549,24 @@ export default function Home() {
                         onChange={(event) => setSalaryForm({ ...salaryForm, period: event.target.value })}
                       />
                     </Field>
+                    <Field label="Zvw-situatie">
+                      <select
+                        className="input"
+                        value={salaryFormZvwContributionType}
+                        onChange={(event) =>
+                          setSalaryForm({
+                            ...salaryForm,
+                            zvwContributionType: event.target.value as ZvwContributionType,
+                          })
+                        }
+                      >
+                        {zvwContributionOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
                     <Field label="Brutoloon">
                       <input
                         className="input"
@@ -3460,14 +3591,12 @@ export default function Home() {
                         onChange={(event) => setSalaryForm({ ...salaryForm, netSalary: event.target.value })}
                       />
                     </Field>
-                    <Field label="Werkgeversbijdrage Zvw">
+                    <Field label={`${salaryFormZvwShortLabel} (${salaryFormZvwRateLabel})`}>
                       <input
                         className="input"
                         inputMode="decimal"
-                        value={salaryForm.employerHealthContribution}
-                        onChange={(event) =>
-                          setSalaryForm({ ...salaryForm, employerHealthContribution: event.target.value })
-                        }
+                        readOnly
+                        value={salaryFormZvwContributionValue}
                       />
                     </Field>
                     <Field label="Betaaldatum">
@@ -3503,7 +3632,7 @@ export default function Home() {
                   </div>
                 </div>
                 <div className="mt-4 overflow-x-auto">
-                  <table className="w-full min-w-[900px] border-collapse text-left text-sm">
+                  <table className="w-full min-w-[980px] border-collapse text-left text-sm">
                     <thead>
                       <tr className="border-b border-[var(--line)] text-xs font-bold uppercase text-[var(--muted)]">
                         <th className="py-3 pr-3">Periode</th>
@@ -3511,6 +3640,7 @@ export default function Home() {
                         <th className="py-3 pr-3">Bruto</th>
                         <th className="py-3 pr-3">Loonheffing</th>
                         <th className="py-3 pr-3">Netto</th>
+                        <th className="py-3 pr-3">Zvw</th>
                         <th className="py-3 pr-3">Status</th>
                         <th className="py-3 pr-3">Actie</th>
                       </tr>
@@ -3531,6 +3661,12 @@ export default function Home() {
                           <td className="py-3 pr-3">{money.format(salary.grossSalary)}</td>
                           <td className="py-3 pr-3">{money.format(salary.wageTax)}</td>
                           <td className="py-3 pr-3">{money.format(salary.netSalary)}</td>
+                          <td className="py-3 pr-3">
+                            <strong>{money.format(getSalaryZvwContribution(salary, active.fiscalYear))}</strong>
+                            <span className="mt-1 block text-xs text-[var(--muted)]">
+                              {getSalaryZvwLabel(salary, active.fiscalYear)}
+                            </span>
+                          </td>
                           <td className="py-3 pr-3">{salary.status === "paid" ? "Betaald" : "Open"}</td>
                           <td className="py-3 pr-3">
                             <div className="flex flex-wrap gap-2">

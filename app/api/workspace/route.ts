@@ -39,6 +39,7 @@ type SalaryRecord = {
   wageTax: number;
   netSalary: number;
   employerHealthContribution: number;
+  zvwContributionType?: "dga_contribution" | "employer_levy";
   status: "paid" | "open";
   paymentDate: string;
 };
