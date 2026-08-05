@@ -1000,21 +1000,21 @@ function getSalaryLaborTaxCredit(salary: SalaryRecord, fallbackFiscalYear: numbe
   );
 }
 
-function getCumulativeSalaryLaborTaxCredit(
+function getCumulativeSalaryTotals(
   admin: Administration,
   salary: SalaryRecord,
   salaries: SalaryRecord[],
 ) {
   const salaryYear = getSalaryYear(salary.period) || admin.fiscalYear;
   const employeeName = getSalaryEmployeeName(admin, salary);
-  return salaries
-    .filter((item) => {
-      const sameEmployee = salary.employeeId
-        ? item.employeeId === salary.employeeId
-        : getSalaryEmployeeName(admin, item) === employeeName;
-      return sameEmployee && getSalaryYear(item.period) === salaryYear && item.period <= salary.period;
-    })
-    .reduce((total, item) => total + getSalaryLaborTaxCredit(item, admin.fiscalYear), 0);
+  const cumulativeSalaries = salaries.filter((item) => {
+    const sameEmployee = salary.employeeId
+      ? item.employeeId === salary.employeeId
+      : getSalaryEmployeeName(admin, item) === employeeName;
+    return sameEmployee && getSalaryYear(item.period) === salaryYear && item.period <= salary.period;
+  });
+
+  return calculateSalaryTotals(cumulativeSalaries, admin.fiscalYear);
 }
 
 function calculateSalaryTotals(salaries: SalaryRecord[], fiscalYear: number) {
@@ -1632,7 +1632,7 @@ function buildPayslipPdf(admin: Administration, salary: SalaryRecord, fiscalYear
   const employeeAddress = getSalaryEmployeeAddress(admin, salary);
   const zvwLabel = getSalaryZvwLabel(salary, admin.fiscalYear);
   const laborTaxCredit = getSalaryLaborTaxCredit(salary, admin.fiscalYear);
-  const cumulativeLaborTaxCredit = getCumulativeSalaryLaborTaxCredit(
+  const cumulativeTotals = getCumulativeSalaryTotals(
     admin,
     salary,
     fiscalYearSalaries,
@@ -1671,9 +1671,20 @@ function buildPayslipPdf(admin: Administration, salary: SalaryRecord, fiscalYear
         ["Brutoloon", money.format(salary.grossSalary)],
         ["Loonheffing", money.format(salary.wageTax)],
         ["Arbeidskorting toegepast", money.format(laborTaxCredit)],
-        ["Arbeidskorting cumulatief", money.format(cumulativeLaborTaxCredit)],
         ["Netto uit te betalen", money.format(salary.netSalary)],
         [zvwLabel, money.format(getSalaryZvwContribution(salary, admin.fiscalYear))],
+      ],
+    },
+    {
+      title: "Cumulatieven t/m deze periode",
+      headers: ["Onderdeel", "Bedrag"],
+      widths: [340, 171],
+      rows: [
+        ["Brutoloon cumulatief", money.format(cumulativeTotals.grossSalary)],
+        ["Loonheffing cumulatief", money.format(cumulativeTotals.wageTax)],
+        ["Arbeidskorting cumulatief", money.format(cumulativeTotals.laborTaxCredit)],
+        ["Netto uitbetaald cumulatief", money.format(cumulativeTotals.netSalary)],
+        [`${zvwLabel} cumulatief`, money.format(cumulativeTotals.employerHealthContribution)],
       ],
     },
   ]);
