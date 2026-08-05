@@ -1102,6 +1102,18 @@ function escapePdfText(value: string | number) {
   return pdfSafe(value).replace(/[\\()]/g, "\\$&");
 }
 
+const pdfBrandColors = {
+  ink: [0.06, 0.09, 0.13],
+  muted: [0.41, 0.44, 0.45],
+  line: [0.85, 0.87, 0.86],
+  teal: [0, 0.15, 0.47],
+  tealSoft: [0.91, 0.94, 0.92],
+  blue: [0, 0.28, 0.12],
+  coral: [0.72, 0.32, 0.24],
+  yellow: [0.54, 0.66, 0.6],
+  white: [1, 1, 1],
+};
+
 function buildPdfReport(
   admin: Administration,
   entries: Entry[],
@@ -1115,17 +1127,7 @@ function buildPdfReport(
   let y = 790;
   let pageNumber = 0;
 
-  const colors = {
-    ink: [0.09, 0.14, 0.12],
-    muted: [0.4, 0.45, 0.43],
-    line: [0.86, 0.9, 0.87],
-    teal: [0.06, 0.46, 0.43],
-    tealSoft: [0.88, 0.96, 0.91],
-    blue: [0.15, 0.39, 0.92],
-    coral: [0.89, 0.37, 0.27],
-    yellow: [0.79, 0.54, 0.02],
-    white: [1, 1, 1],
-  };
+  const colors = pdfBrandColors;
 
   const rgb = (color: number[]) => color.join(" ");
   const truncate = (value: string, max: number) =>
@@ -1338,14 +1340,7 @@ function buildTablePdf(
   let commands: string[] = [];
   let pageNumber = 0;
   let y = 790;
-  const colors = {
-    ink: [0.09, 0.14, 0.12],
-    muted: [0.4, 0.45, 0.43],
-    line: [0.86, 0.9, 0.87],
-    teal: [0.06, 0.46, 0.43],
-    tealSoft: [0.88, 0.96, 0.91],
-    white: [1, 1, 1],
-  };
+  const colors = pdfBrandColors;
 
   const rgb = (color: number[]) => color.join(" ");
   const truncate = (value: string | number, width: number) => {
