@@ -95,7 +95,7 @@ type InvoiceDraft = {
   fileType: string;
   fileSize: number;
   createdAt: string;
-  source: "AI-herkenning" | "slim gelezen" | "handmatig";
+  source: "UBL/XML" | "AI-herkenning" | "slim gelezen" | "handmatig";
   confidence: number;
   note: string;
   invoiceNumber: string;
@@ -571,6 +571,224 @@ function inferRelation(source: string, contacts: Contact[]) {
   const normalized = normalizeSearchText(source);
   const match = contacts.find((contact) => normalized.includes(normalizeSearchText(contact.name)));
   return match?.name ?? "";
+}
+
+function normalizeBusinessId(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function textOf(element: Element | null | undefined) {
+  return element?.textContent?.trim() ?? "";
+}
+
+function childByLocalName(element: Element | null | undefined, localName: string) {
+  if (!element) return null;
+  return Array.from(element.children).find((child) => child.localName === localName) ?? null;
+}
+
+function childText(element: Element | null | undefined, localName: string) {
+  return textOf(childByLocalName(element, localName));
+}
+
+function descendantsByLocalName(element: Element | Document | null | undefined, localName: string) {
+  if (!element) return [];
+  return Array.from(element.getElementsByTagName("*")).filter((child) => child.localName === localName);
+}
+
+function firstDescendant(element: Element | Document | null | undefined, localName: string) {
+  return descendantsByLocalName(element, localName)[0] ?? null;
+}
+
+function firstDescendantText(element: Element | Document | null | undefined, localName: string) {
+  return textOf(firstDescendant(element, localName));
+}
+
+function descendantTextPath(element: Element | Document | null | undefined, path: string[]) {
+  let current: Element | null = element instanceof Document ? element.documentElement : element ?? null;
+  for (const part of path) {
+    current = firstDescendant(current, part);
+    if (!current) return "";
+  }
+  return textOf(current);
+}
+
+function parseXmlDecimal(value: string) {
+  return parseDecimal(value.replace(".", ","));
+}
+
+function parseUblVatRate(value: string): "0" | "9" | "21" {
+  const rate = Number(value);
+  if (Math.abs(rate - 9) < 0.01) return "9";
+  if (Math.abs(rate) < 0.01) return "0";
+  return "21";
+}
+
+function partyName(partyWrapper: Element | null) {
+  const party = firstDescendant(partyWrapper, "Party") ?? partyWrapper;
+  return (
+    descendantTextPath(party, ["PartyName", "Name"]) ||
+    descendantTextPath(party, ["PartyLegalEntity", "RegistrationName"]) ||
+    firstDescendantText(party, "Name")
+  );
+}
+
+function partyIdentifiers(partyWrapper: Element | null) {
+  const party = firstDescendant(partyWrapper, "Party") ?? partyWrapper;
+  return descendantsByLocalName(party, "CompanyID")
+    .map((element) => textOf(element))
+    .filter(Boolean);
+}
+
+function partyMatchesAdministration(
+  partyWrapper: Element | null,
+  partyNameValue: string,
+  administration: Administration,
+) {
+  const adminIds = [administration.kvk, administration.vatNumber]
+    .map(normalizeBusinessId)
+    .filter((value) => value.length >= 6);
+  const partyIds = partyIdentifiers(partyWrapper)
+    .map(normalizeBusinessId)
+    .filter((value) => value.length >= 6);
+  const idMatch = partyIds.some((partyId) =>
+    adminIds.some((adminId) => partyId.includes(adminId) || adminId.includes(partyId)),
+  );
+  const nameMatch = [administration.name, administration.owner]
+    .map(normalizeSearchText)
+    .filter((value) => value.length >= 5)
+    .some((adminName) => {
+      const normalizedParty = normalizeSearchText(partyNameValue);
+      return normalizedParty.includes(adminName) || adminName.includes(normalizedParty);
+    });
+  return idMatch || nameMatch;
+}
+
+function contactMatchesParty(contact: Contact, name: string, identifiers: string[]) {
+  const contactId = normalizeBusinessId(contact.kvk);
+  const partyIds = identifiers.map(normalizeBusinessId).filter((value) => value.length >= 6);
+  const idMatch = contactId.length >= 6 && partyIds.some((partyId) => partyId.includes(contactId) || contactId.includes(partyId));
+  const nameMatch =
+    normalizeSearchText(contact.name).length >= 4 &&
+    normalizeSearchText(name).includes(normalizeSearchText(contact.name));
+  return idMatch || nameMatch;
+}
+
+function inferUblInvoiceType(
+  supplierWrapper: Element | null,
+  supplierName: string,
+  customerWrapper: Element | null,
+  customerName: string,
+  administration: Administration,
+): EntryType {
+  const supplierIsOwn = partyMatchesAdministration(supplierWrapper, supplierName, administration);
+  const customerIsOwn = partyMatchesAdministration(customerWrapper, customerName, administration);
+  if (supplierIsOwn && !customerIsOwn) return "income";
+  if (customerIsOwn && !supplierIsOwn) return "expense";
+
+  const supplierIds = partyIdentifiers(supplierWrapper);
+  const customerIds = partyIdentifiers(customerWrapper);
+  const knownCustomer = administration.contacts.some(
+    (contact) => contact.type === "customer" && contactMatchesParty(contact, customerName, customerIds),
+  );
+  const knownSupplier = administration.contacts.some(
+    (contact) => contact.type === "supplier" && contactMatchesParty(contact, supplierName, supplierIds),
+  );
+  if (knownCustomer && !knownSupplier) return "income";
+  if (knownSupplier && !knownCustomer) return "expense";
+
+  return "income";
+}
+
+function buildUblInvoiceDraft(file: File, sourceText: string, administration: Administration): InvoiceDraft | null {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(sourceText, "application/xml");
+  if (doc.querySelector("parsererror")) return null;
+
+  const root = doc.documentElement;
+  if (!["Invoice", "CreditNote"].includes(root.localName)) return null;
+
+  const isCreditInvoice = root.localName === "CreditNote" || sourceLooksLikeCreditInvoice(sourceText);
+  const supplierWrapper = firstDescendant(doc, "AccountingSupplierParty");
+  const customerWrapper = firstDescendant(doc, "AccountingCustomerParty");
+  const supplier = partyName(supplierWrapper);
+  const customer = partyName(customerWrapper);
+  const type = inferUblInvoiceType(supplierWrapper, supplier, customerWrapper, customer, administration);
+  const relation = type === "income" ? customer : supplier;
+  const category = entryCategories[type][0];
+  const monetaryTotal =
+    firstDescendant(doc, "LegalMonetaryTotal") ?? firstDescendant(doc, "RequestedMonetaryTotal");
+  const taxableAmount = parseXmlDecimal(firstDescendantText(monetaryTotal, "TaxExclusiveAmount"));
+  const taxInclusiveAmount = parseXmlDecimal(firstDescendantText(monetaryTotal, "TaxInclusiveAmount"));
+  const payableAmount = parseXmlDecimal(firstDescendantText(monetaryTotal, "PayableAmount"));
+  const taxSubtotals = descendantsByLocalName(doc, "TaxSubtotal");
+  const sign = isCreditInvoice ? -1 : 1;
+  const vatLines = taxSubtotals
+    .map((subtotal) => {
+      const amount = parseXmlDecimal(childText(subtotal, "TaxableAmount"));
+      const rate = parseUblVatRate(firstDescendantText(subtotal, "Percent"));
+      return amount !== null && amount !== 0
+        ? createInvoiceVatLine(category, formatDecimalInput(Math.abs(amount) * sign), rate)
+        : null;
+    })
+    .filter((line): line is InvoiceVatLine => Boolean(line));
+  const lineTotal = calculateInvoiceVatLineTotal(vatLines);
+  const amount =
+    lineTotal !== 0
+      ? lineTotal
+      : taxableAmount !== null && taxableAmount !== 0
+        ? Math.abs(taxableAmount) * sign
+        : payableAmount !== null && payableAmount !== 0 && taxInclusiveAmount === null
+          ? Math.abs(payableAmount) * sign
+          : 0;
+  const invoiceNumber = childText(root, "ID");
+  const description =
+    firstDescendantText(doc, "Note") ||
+    firstDescendantText(firstDescendant(doc, root.localName === "CreditNote" ? "CreditNoteLine" : "InvoiceLine"), "Name") ||
+    (invoiceNumber ? `Factuur ${invoiceNumber}` : file.name.replace(/\.[^.]+$/, ""));
+  const confidenceParts = [
+    invoiceNumber ? 18 : 0,
+    childText(root, "IssueDate") ? 16 : 0,
+    relation ? 18 : 0,
+    amount !== 0 ? 22 : 0,
+    vatLines.length ? 18 : 0,
+  ];
+
+  return {
+    id: uid(),
+    fileName: file.name,
+    fileType: file.type || "UBL/XML",
+    fileSize: file.size,
+    createdAt: new Date().toISOString(),
+    source: "UBL/XML",
+    confidence: Math.min(99, 40 + confidenceParts.reduce((total, value) => total + value, 0)),
+    note:
+      "UBL/XML rechtstreeks gelezen. Controleer de conceptboeking; AI is hiervoor niet gebruikt.",
+    invoiceNumber,
+    date: childText(root, "IssueDate") || today,
+    description,
+    relation,
+    type,
+    category,
+    amount: amount !== 0 ? formatDecimalInput(amount) : "",
+    vatRate: vatLines[0]?.vatRate ?? findVatRate(sourceText),
+    vatLines:
+      vatLines.length > 0
+        ? vatLines
+        : [createInvoiceVatLine(category, amount !== 0 ? formatDecimalInput(amount) : "", findVatRate(sourceText))],
+    status: type === "income" ? "open" : "paid",
+    paidDate: type === "income" ? "" : childText(root, "IssueDate") || today,
+    selected: true,
+  };
+}
+
+function buildLocalInvoiceDraft(file: File, sourceText: string, administration: Administration) {
+  const looksLikeXml =
+    /\.(xml|ubl)$/i.test(file.name) || /<(?:\w+:)?(?:Invoice|CreditNote)\b/i.test(sourceText);
+  if (looksLikeXml) {
+    const ublDraft = buildUblInvoiceDraft(file, sourceText, administration);
+    if (ublDraft) return ublDraft;
+  }
+  return buildInvoiceDraft(file, sourceText, administration.contacts);
 }
 
 function buildInvoiceDraft(file: File, sourceText: string, contacts: Contact[]): InvoiceDraft {
@@ -2174,6 +2392,9 @@ export default function Home() {
     try {
       if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) return "";
       const rawText = await file.text();
+      if (/\.(xml|ubl)$/i.test(file.name) || rawText.trim().startsWith("<?xml")) {
+        return rawText;
+      }
       const readable = rawText
         .replace(/[^\x09\x0A\x0D\x20-\x7E\u00A0-\u024F]/g, " ")
         .replace(/\s{2,}/g, " ")
@@ -2231,12 +2452,27 @@ export default function Home() {
     event.target.value = "";
     if (!files.length) return;
 
-    setInvoiceImportStatus(`${files.length} bestand(en) met AI herkennen...`);
+    setInvoiceImportStatus(`${files.length} bestand(en) lezen...`);
     let aiCount = 0;
+    let localCount = 0;
     let fallbackCount = 0;
     const fallbackMessages = new Set<string>();
     const drafts = await Promise.all(
       files.map(async (file) => {
+        const sourceText = await readInvoiceFileText(file);
+        const isPdfOrImage =
+          file.type.startsWith("image/") || file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+        if (sourceText) {
+          const localDraft = buildLocalInvoiceDraft(file, sourceText, active);
+          const strongLocalDraft =
+            localDraft.source === "UBL/XML" ||
+            (localDraft.confidence >= 70 && Boolean(localDraft.invoiceNumber || localDraft.amount));
+          if (strongLocalDraft) {
+            localCount += 1;
+            return localDraft;
+          }
+        }
+
         try {
           const draft = await analyzeInvoiceWithAi(file);
           aiCount += 1;
@@ -2245,9 +2481,8 @@ export default function Home() {
           fallbackCount += 1;
           const errorMessage = error instanceof Error ? error.message : "AI-herkenning mislukt.";
           fallbackMessages.add(errorMessage);
-          const sourceText = await readInvoiceFileText(file);
-          const draft = buildInvoiceDraft(file, sourceText, active.contacts);
-          if (!sourceText && (file.type === "application/pdf" || /\.pdf$/i.test(file.name))) {
+          const draft = buildLocalInvoiceDraft(file, sourceText, active);
+          if (!sourceText && isPdfOrImage) {
             return {
               ...draft,
               source: "handmatig" as const,
@@ -2271,7 +2506,7 @@ export default function Home() {
       ? ` ${fallbackCount} bestand(en) zijn lokaal voorgesteld${fallbackMessages.size ? `: ${Array.from(fallbackMessages)[0]}` : "."}`
       : "";
     setInvoiceImportStatus(
-      `${drafts.length} conceptfactuur/facturen toegevoegd. ${aiCount} via AI.${fallbackText} Controleer de voorstellen.`,
+      `${drafts.length} conceptfactuur/facturen toegevoegd. ${localCount} lokaal gelezen. ${aiCount} via AI.${fallbackText} Controleer de voorstellen.`,
     );
   };
 
@@ -4777,9 +5012,9 @@ function InvoiceImportPanel({
         <div className="mt-4 rounded-lg border border-[var(--line)] bg-white p-4">
           <p className="text-sm font-semibold">Slim inlezen</p>
           <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
-            Met een OpenAI API-sleutel herkent BoekBalans PDF&apos;s, afbeeldingen en UBL/XML-facturen
-            automatisch. Zonder sleutel maakt de app een lokaal voorstel op basis van bestandsnaam en
-            leesbare tekst.
+            UBL/XML-facturen leest BoekBalans rechtstreeks in met factuurnummer, relatie, bedragen
+            en btw-regels. PDF&apos;s en afbeeldingen worden met AI gelezen; als dat niet lukt maakt
+            de app een lokaal controlevoorstel.
           </p>
           {importStatus ? (
             <p className="mt-2 text-sm font-semibold text-[var(--teal)]">{importStatus}</p>
@@ -4952,7 +5187,7 @@ function InvoiceImportPanel({
                               onUpdateVatLine(draft.id, line.id, "category", event.target.value)
                             }
                           >
-                            {entryCategories.expense.map((category) => (
+                            {entryCategories[draft.type].map((category) => (
                               <option key={category} value={category}>
                                 {category}
                               </option>
