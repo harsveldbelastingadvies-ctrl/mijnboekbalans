@@ -223,6 +223,7 @@ const entryCategories: Record<EntryType, string[]> = {
   expense: [
     "Inkoop",
     "Uitbesteed werk",
+    "Managementvergoeding",
     "Investeringen",
     "Software",
     "Kantoorkosten",
