@@ -344,6 +344,7 @@ const emptyEntry = {
   type: "income" as EntryType,
   category: entryCategories.income[0],
   amount: "",
+  amountInclVat: "",
   vatRate: "21",
   vatLines: [createInvoiceVatLine(entryCategories.expense[0], "", "21")],
   status: "paid" as EntryStatus,
@@ -405,6 +406,20 @@ function formatDecimalInput(value: number) {
 
 function roundCents(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+function calculateExclusiveAmountInput(amountInclVat: string, vatRate: string) {
+  const inclusiveAmount = parseAmountInput(amountInclVat);
+  const rate = Number(vatRate);
+  if (inclusiveAmount === null || !Number.isFinite(rate)) return "";
+  return formatDecimalInput(roundCents(inclusiveAmount / (1 + rate / 100)));
+}
+
+function calculateInclusiveAmountInput(amountExVat: string, vatRate: string) {
+  const exclusiveAmount = parseAmountInput(amountExVat);
+  const rate = Number(vatRate);
+  if (exclusiveAmount === null || !Number.isFinite(rate)) return "";
+  return formatDecimalInput(roundCents(exclusiveAmount * (1 + rate / 100)));
 }
 
 function normalizeZvwContributionType(value: unknown): ZvwContributionType {
@@ -533,6 +548,16 @@ function calculateInvoiceVatLineTotal(lines: InvoiceVatLine[]) {
   return lines.reduce((total, line) => {
     const amount = parseAmountInput(line.amount);
     return isValidBookingAmount(amount) ? total + amount : total;
+  }, 0);
+}
+
+function calculateInvoiceVatLineInclusiveTotal(lines: InvoiceVatLine[]) {
+  return lines.reduce((total, line) => {
+    const amount = parseAmountInput(line.amount);
+    const rate = Number(line.vatRate);
+    return isValidBookingAmount(amount) && Number.isFinite(rate)
+      ? total + amount * (1 + rate / 100)
+      : total;
   }, 0);
 }
 
@@ -1983,7 +2008,6 @@ export default function Home() {
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [invoiceDrafts, setInvoiceDrafts] = useState<InvoiceDraft[]>([]);
   const [invoiceImportStatus, setInvoiceImportStatus] = useState("");
-  const [vatCalculator, setVatCalculator] = useState({ amountInclVat: "", vatRate: "21" });
   const [contactForm, setContactForm] = useState(emptyContact);
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
   const [salaryForm, setSalaryForm] = useState(emptySalary);
@@ -2148,22 +2172,13 @@ export default function Home() {
     () => buildVatOverview(filteredEntries, vatDeductionPercent),
     [filteredEntries, vatDeductionPercent],
   );
-  const vatCalculatorIncl = parseAmountInput(vatCalculator.amountInclVat);
-  const vatCalculatorRate = Number(vatCalculator.vatRate);
-  const vatCalculatorEx =
-    vatCalculatorIncl !== null && Number.isFinite(vatCalculatorRate)
-      ? roundCents(vatCalculatorIncl / (1 + vatCalculatorRate / 100))
-      : null;
-  const vatCalculatorVat =
-    vatCalculatorIncl !== null && vatCalculatorEx !== null
-      ? roundCents(vatCalculatorIncl - vatCalculatorEx)
-      : null;
   const profit = summary.revenue - summary.costs;
   const vatBalance = summary.vatToPay - summary.vatToClaim;
   const administrationFileBase = `${safeFileName(active.name) || "boekbalans"}-${active.fiscalYear}`;
   const periodFileBase = `${administrationFileBase}-${getPeriodFilePart(period)}`;
   const latestEntries = filteredEntries.slice(0, 4);
   const entryVatLinesTotal = calculateInvoiceVatLineTotal(entryForm.vatLines);
+  const entryVatLinesInclTotal = calculateInvoiceVatLineInclusiveTotal(entryForm.vatLines);
   const entryUsesSplitVatLines =
     entryForm.type === "expense" && entryForm.vatLines.length > 1 && !editingEntryId;
   const enteredAmount =
@@ -2281,10 +2296,15 @@ export default function Home() {
       line.id === lineId ? { ...line, [field]: value } : line,
     );
     const totalAmount = calculateInvoiceVatLineTotal(vatLines);
+    const totalAmountInclVat = calculateInvoiceVatLineInclusiveTotal(vatLines);
     setEntryForm({
       ...entryForm,
       vatLines,
       amount: totalAmount !== 0 ? formatDecimalInput(totalAmount) : entryForm.amount,
+      amountInclVat:
+        totalAmountInclVat !== 0
+          ? formatDecimalInput(roundCents(totalAmountInclVat))
+          : entryForm.amountInclVat,
       vatRate: vatLines.length === 1 ? vatLines[0].vatRate : entryForm.vatRate,
       category: vatLines.length === 1 ? vatLines[0].category : entryForm.category,
     });
@@ -2294,10 +2314,15 @@ export default function Home() {
     if (entryForm.vatLines.length <= 1) return;
     const vatLines = entryForm.vatLines.filter((line) => line.id !== lineId);
     const totalAmount = calculateInvoiceVatLineTotal(vatLines);
+    const totalAmountInclVat = calculateInvoiceVatLineInclusiveTotal(vatLines);
     setEntryForm({
       ...entryForm,
       vatLines,
       amount: totalAmount !== 0 ? formatDecimalInput(totalAmount) : entryForm.amount,
+      amountInclVat:
+        totalAmountInclVat !== 0
+          ? formatDecimalInput(roundCents(totalAmountInclVat))
+          : entryForm.amountInclVat,
     });
   };
 
@@ -2980,6 +3005,7 @@ export default function Home() {
       type: entry.type,
       category: entry.category,
       amount: String(entry.amount).replace(".", ","),
+      amountInclVat: calculateInclusiveAmountInput(String(entry.amount).replace(".", ","), String(entry.vatRate)),
       vatRate: String(entry.vatRate),
       vatLines: [
         createInvoiceVatLine(
@@ -3469,22 +3495,58 @@ export default function Home() {
                     <Field label="Omschrijving">
                       <input className="input" value={entryForm.description} onChange={(event) => setEntryForm({ ...entryForm, description: event.target.value })} />
                     </Field>
+                    <Field label="Bedrag incl. btw">
+                      <input
+                        className="input"
+                        inputMode="decimal"
+                        placeholder="Bijv. 121,00"
+                        readOnly={entryUsesSplitVatLines}
+                        value={
+                          entryUsesSplitVatLines
+                            ? entryVatLinesInclTotal !== 0
+                              ? formatDecimalInput(roundCents(entryVatLinesInclTotal))
+                              : ""
+                            : entryForm.amountInclVat
+                        }
+                        onChange={(event) => {
+                          const amountInclVat = event.target.value;
+                          const amount = calculateExclusiveAmountInput(amountInclVat, entryForm.vatRate);
+                          setEntryForm({
+                            ...entryForm,
+                            amountInclVat,
+                            amount,
+                            vatLines:
+                              entryForm.vatLines.length === 1
+                                ? [{ ...entryForm.vatLines[0], amount }]
+                                : entryForm.vatLines,
+                          });
+                        }}
+                      />
+                    </Field>
                     <Field label="Bedrag excl. btw">
                       <input
                         className="input"
                         inputMode="decimal"
                         readOnly={entryUsesSplitVatLines}
-                        value={entryUsesSplitVatLines ? formatDecimalInput(entryVatLinesTotal) : entryForm.amount}
-                        onChange={(event) =>
+                        value={
+                          entryUsesSplitVatLines
+                            ? entryVatLinesTotal !== 0
+                              ? formatDecimalInput(entryVatLinesTotal)
+                              : ""
+                            : entryForm.amount
+                        }
+                        onChange={(event) => {
+                          const amount = event.target.value;
                           setEntryForm({
                             ...entryForm,
-                            amount: event.target.value,
+                            amount,
+                            amountInclVat: calculateInclusiveAmountInput(amount, entryForm.vatRate),
                             vatLines:
                               entryForm.vatLines.length === 1
-                                ? [{ ...entryForm.vatLines[0], amount: event.target.value }]
+                                ? [{ ...entryForm.vatLines[0], amount }]
                                 : entryForm.vatLines,
-                          })
-                        }
+                          });
+                        }}
                       />
                     </Field>
                     <Field label="Btw">
@@ -3492,16 +3554,24 @@ export default function Home() {
                         className="input"
                         disabled={entryUsesSplitVatLines}
                         value={entryForm.vatRate}
-                        onChange={(event) =>
+                        onChange={(event) => {
+                          const vatRate = event.target.value;
+                          const amount = entryForm.amountInclVat
+                            ? calculateExclusiveAmountInput(entryForm.amountInclVat, vatRate)
+                            : entryForm.amount;
                           setEntryForm({
                             ...entryForm,
-                            vatRate: event.target.value,
+                            vatRate,
+                            amount,
+                            amountInclVat: entryForm.amountInclVat
+                              ? entryForm.amountInclVat
+                              : calculateInclusiveAmountInput(entryForm.amount, vatRate),
                             vatLines:
                               entryForm.vatLines.length === 1
-                                ? [{ ...entryForm.vatLines[0], vatRate: event.target.value }]
+                                ? [{ ...entryForm.vatLines[0], amount, vatRate }]
                                 : entryForm.vatLines,
-                          })
-                        }
+                          });
+                        }}
                       >
                         <option value="21">21%</option>
                         <option value="9">9%</option>
@@ -4030,56 +4100,6 @@ export default function Home() {
               <Metric label="Open posten" value={String(openEntries.length)} accent="yellow" />
               <Metric label="Afschrijving check" value={String(depreciationCandidates.length)} accent="blue" />
               <Metric label="Open salarissen" value={String(openSalaries.length)} accent="yellow" />
-
-              <section className="panel xl:col-span-4">
-                <div className="section-title">
-                  <div>
-                    <p className="eyebrow">Snelle rekentool</p>
-                    <h3>Inclusief btw terugrekenen</h3>
-                  </div>
-                  <span className="status-pill">
-                    {vatCalculatorRate}% btw
-                  </span>
-                </div>
-                <div className="mt-4 vat-calculator-grid">
-                  <Field label="Bedrag incl. btw">
-                    <input
-                      className="input"
-                      inputMode="decimal"
-                      placeholder="Bijv. 121,00"
-                      value={vatCalculator.amountInclVat}
-                      onChange={(event) =>
-                        setVatCalculator({ ...vatCalculator, amountInclVat: event.target.value })
-                      }
-                    />
-                  </Field>
-                  <Field label="Btw-percentage">
-                    <select
-                      className="input"
-                      value={vatCalculator.vatRate}
-                      onChange={(event) =>
-                        setVatCalculator({ ...vatCalculator, vatRate: event.target.value })
-                      }
-                    >
-                      <option value="21">21%</option>
-                      <option value="9">9%</option>
-                      <option value="0">0%</option>
-                    </select>
-                  </Field>
-                  <div className="vat-result-card">
-                    <p className="eyebrow">Exclusief btw</p>
-                    <strong>{vatCalculatorEx !== null ? money.format(vatCalculatorEx) : "-"}</strong>
-                  </div>
-                  <div className="vat-result-card">
-                    <p className="eyebrow">Btw-bedrag</p>
-                    <strong>{vatCalculatorVat !== null ? money.format(vatCalculatorVat) : "-"}</strong>
-                  </div>
-                  <div className="vat-result-card">
-                    <p className="eyebrow">Inclusief btw</p>
-                    <strong>{vatCalculatorIncl !== null ? money.format(vatCalculatorIncl) : "-"}</strong>
-                  </div>
-                </div>
-              </section>
 
               <section className="panel xl:col-span-2">
                 <div className="section-title">

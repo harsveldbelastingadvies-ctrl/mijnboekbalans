@@ -352,11 +352,6 @@ select:focus-visible {
   font-weight: 850;
 }
 
-.vat-calculator-grid {
-  display: grid;
-  gap: 0.75rem;
-}
-
 .invoice-upload-panel {
   background:
     linear-gradient(90deg, rgba(0, 71, 31, 0.07), transparent 40%),
@@ -696,11 +691,6 @@ select:focus-visible {
 
   .vat-tool-grid {
     grid-template-columns: minmax(13rem, 1fr) repeat(3, minmax(9rem, 0.7fr)) minmax(12rem, 0.8fr);
-    align-items: end;
-  }
-
-  .vat-calculator-grid {
-    grid-template-columns: minmax(12rem, 1fr) minmax(9rem, 0.55fr) repeat(3, minmax(9rem, 0.8fr));
     align-items: end;
   }
 
