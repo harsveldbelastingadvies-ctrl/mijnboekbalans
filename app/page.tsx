@@ -859,7 +859,12 @@ type InvoiceAiResult = {
   note: string;
 };
 
-function buildAiInvoiceDraft(file: File, result: InvoiceAiResult): InvoiceDraft {
+function buildAiInvoiceDraft(
+  file: File,
+  result: InvoiceAiResult,
+  index = 0,
+  total = 1,
+): InvoiceDraft {
   const aiVatLines = result.vatLines
     .filter((line) => line.amountExVat !== 0)
     .map((line) =>
@@ -876,7 +881,7 @@ function buildAiInvoiceDraft(file: File, result: InvoiceAiResult): InvoiceDraft 
 
   return {
     id: uid(),
-    fileName: file.name,
+    fileName: total > 1 ? `${file.name} · factuur ${index + 1}/${total}` : file.name,
     fileType: file.type || "Onbekend bestandstype",
     fileSize: file.size,
     createdAt: new Date().toISOString(),
@@ -1978,6 +1983,7 @@ export default function Home() {
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [invoiceDrafts, setInvoiceDrafts] = useState<InvoiceDraft[]>([]);
   const [invoiceImportStatus, setInvoiceImportStatus] = useState("");
+  const [vatCalculator, setVatCalculator] = useState({ amountInclVat: "", vatRate: "21" });
   const [contactForm, setContactForm] = useState(emptyContact);
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
   const [salaryForm, setSalaryForm] = useState(emptySalary);
@@ -2142,6 +2148,16 @@ export default function Home() {
     () => buildVatOverview(filteredEntries, vatDeductionPercent),
     [filteredEntries, vatDeductionPercent],
   );
+  const vatCalculatorIncl = parseAmountInput(vatCalculator.amountInclVat);
+  const vatCalculatorRate = Number(vatCalculator.vatRate);
+  const vatCalculatorEx =
+    vatCalculatorIncl !== null && Number.isFinite(vatCalculatorRate)
+      ? roundCents(vatCalculatorIncl / (1 + vatCalculatorRate / 100))
+      : null;
+  const vatCalculatorVat =
+    vatCalculatorIncl !== null && vatCalculatorEx !== null
+      ? roundCents(vatCalculatorIncl - vatCalculatorEx)
+      : null;
   const profit = summary.revenue - summary.costs;
   const vatBalance = summary.vatToPay - summary.vatToClaim;
   const administrationFileBase = `${safeFileName(active.name) || "boekbalans"}-${active.fiscalYear}`;
@@ -2437,14 +2453,17 @@ export default function Home() {
     });
     const data = (await response.json()) as {
       result?: InvoiceAiResult;
+      results?: InvoiceAiResult[];
       error?: string;
     };
 
-    if (!response.ok || !data.result) {
+    const results = data.results?.length ? data.results : data.result ? [data.result] : [];
+
+    if (!response.ok || !results.length) {
       throw new Error(data.error ?? "AI-herkenning mislukt.");
     }
 
-    return buildAiInvoiceDraft(file, data.result);
+    return results.map((result, index) => buildAiInvoiceDraft(file, result, index, results.length));
   };
 
   const importInvoiceFiles = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -2457,7 +2476,7 @@ export default function Home() {
     let localCount = 0;
     let fallbackCount = 0;
     const fallbackMessages = new Set<string>();
-    const drafts = await Promise.all(
+    const draftGroups = await Promise.all(
       files.map(async (file) => {
         const sourceText = await readInvoiceFileText(file);
         const isPdfOrImage =
@@ -2469,37 +2488,42 @@ export default function Home() {
             (localDraft.confidence >= 70 && Boolean(localDraft.invoiceNumber || localDraft.amount));
           if (strongLocalDraft) {
             localCount += 1;
-            return localDraft;
+            return [localDraft];
           }
         }
 
         try {
-          const draft = await analyzeInvoiceWithAi(file);
-          aiCount += 1;
-          return draft;
+          const drafts = await analyzeInvoiceWithAi(file);
+          aiCount += drafts.length;
+          return drafts;
         } catch (error) {
           fallbackCount += 1;
           const errorMessage = error instanceof Error ? error.message : "AI-herkenning mislukt.";
           fallbackMessages.add(errorMessage);
           const draft = buildLocalInvoiceDraft(file, sourceText, active);
           if (!sourceText && isPdfOrImage) {
-            return {
-              ...draft,
-              source: "handmatig" as const,
-              confidence: 0,
-              amount: "",
-              vatLines: [createInvoiceVatLine(draft.category, "", draft.vatRate)],
-              note:
-                `Deze PDF kon zonder AI niet veilig worden gelezen. AI-fout: ${errorMessage}`,
-            };
+            return [
+              {
+                ...draft,
+                source: "handmatig" as const,
+                confidence: 0,
+                amount: "",
+                vatLines: [createInvoiceVatLine(draft.category, "", draft.vatRate)],
+                note:
+                  `Deze PDF kon zonder AI niet veilig worden gelezen. AI-fout: ${errorMessage}`,
+              },
+            ];
           }
-          return {
-            ...draft,
-            note: `${draft.note} AI-fout: ${errorMessage}`,
-          };
+          return [
+            {
+              ...draft,
+              note: `${draft.note} AI-fout: ${errorMessage}`,
+            },
+          ];
         }
       }),
     );
+    const drafts = draftGroups.flat();
 
     setInvoiceDrafts((items) => [...drafts, ...items]);
     const fallbackText = fallbackCount
@@ -4007,6 +4031,56 @@ export default function Home() {
               <Metric label="Afschrijving check" value={String(depreciationCandidates.length)} accent="blue" />
               <Metric label="Open salarissen" value={String(openSalaries.length)} accent="yellow" />
 
+              <section className="panel xl:col-span-4">
+                <div className="section-title">
+                  <div>
+                    <p className="eyebrow">Snelle rekentool</p>
+                    <h3>Inclusief btw terugrekenen</h3>
+                  </div>
+                  <span className="status-pill">
+                    {vatCalculatorRate}% btw
+                  </span>
+                </div>
+                <div className="mt-4 vat-calculator-grid">
+                  <Field label="Bedrag incl. btw">
+                    <input
+                      className="input"
+                      inputMode="decimal"
+                      placeholder="Bijv. 121,00"
+                      value={vatCalculator.amountInclVat}
+                      onChange={(event) =>
+                        setVatCalculator({ ...vatCalculator, amountInclVat: event.target.value })
+                      }
+                    />
+                  </Field>
+                  <Field label="Btw-percentage">
+                    <select
+                      className="input"
+                      value={vatCalculator.vatRate}
+                      onChange={(event) =>
+                        setVatCalculator({ ...vatCalculator, vatRate: event.target.value })
+                      }
+                    >
+                      <option value="21">21%</option>
+                      <option value="9">9%</option>
+                      <option value="0">0%</option>
+                    </select>
+                  </Field>
+                  <div className="vat-result-card">
+                    <p className="eyebrow">Exclusief btw</p>
+                    <strong>{vatCalculatorEx !== null ? money.format(vatCalculatorEx) : "-"}</strong>
+                  </div>
+                  <div className="vat-result-card">
+                    <p className="eyebrow">Btw-bedrag</p>
+                    <strong>{vatCalculatorVat !== null ? money.format(vatCalculatorVat) : "-"}</strong>
+                  </div>
+                  <div className="vat-result-card">
+                    <p className="eyebrow">Inclusief btw</p>
+                    <strong>{vatCalculatorIncl !== null ? money.format(vatCalculatorIncl) : "-"}</strong>
+                  </div>
+                </div>
+              </section>
+
               <section className="panel xl:col-span-2">
                 <div className="section-title">
                   <div>
@@ -5013,8 +5087,8 @@ function InvoiceImportPanel({
           <p className="text-sm font-semibold">Slim inlezen</p>
           <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
             UBL/XML-facturen leest BoekBalans rechtstreeks in met factuurnummer, relatie, bedragen
-            en btw-regels. PDF&apos;s en afbeeldingen worden met AI gelezen; als dat niet lukt maakt
-            de app een lokaal controlevoorstel.
+            en btw-regels. PDF&apos;s, afbeeldingen en scanbundels met meerdere facturen worden met AI
+            gelezen; als dat niet lukt maakt de app een lokaal controlevoorstel.
           </p>
           {importStatus ? (
             <p className="mt-2 text-sm font-semibold text-[var(--teal)]">{importStatus}</p>

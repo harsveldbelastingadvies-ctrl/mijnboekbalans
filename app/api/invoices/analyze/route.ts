@@ -30,7 +30,7 @@ type InvoiceAnalysis = {
   note: string;
 };
 
-const maxFileSize = 12 * 1024 * 1024;
+const maxFileSize = 25 * 1024 * 1024;
 const allowedTypes = new Set([
   "application/pdf",
   "image/jpeg",
@@ -181,6 +181,7 @@ function normalizeAnalysis(value: unknown, administrationJson: string): InvoiceA
   const expenseCategories = [
     "Inkoop",
     "Uitbesteed werk",
+    "Managementvergoeding",
     "Investeringen",
     "Software",
     "Kantoorkosten",
@@ -303,6 +304,12 @@ function normalizeAnalysis(value: unknown, administrationJson: string): InvoiceA
   };
 }
 
+function normalizeAnalysisBatch(value: unknown, administrationJson: string) {
+  const data = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const rawInvoices = Array.isArray(data.invoices) ? data.invoices : [value];
+  return rawInvoices.map((invoice) => normalizeAnalysis(invoice, administrationJson));
+}
+
 export async function POST(request: NextRequest) {
   const apiKey = process.env.OPENAI_API_KEY;
   const model = process.env.OPENAI_INVOICE_MODEL || "gpt-4.1";
@@ -328,7 +335,7 @@ export async function POST(request: NextRequest) {
 
   if (file.size > maxFileSize) {
     return NextResponse.json(
-      { error: "Dit bestand is te groot voor AI-herkenning. Gebruik maximaal 12 MB." },
+      { error: "Dit bestand is te groot voor AI-herkenning. Gebruik maximaal 25 MB." },
       { status: 413 },
     );
   }
@@ -342,9 +349,69 @@ export async function POST(request: NextRequest) {
 
   const mimeType = file.type || "application/octet-stream";
   const fileData = `data:${mimeType};base64,${getBase64(await file.arrayBuffer())}`;
+  const invoiceProperties = {
+    invoiceNumber: { type: "string" },
+    date: { type: "string", description: "Datum als YYYY-MM-DD" },
+    description: { type: "string" },
+    relation: { type: "string" },
+    supplierName: { type: "string" },
+    supplierKvk: { type: "string" },
+    supplierVatNumber: { type: "string" },
+    customerName: { type: "string" },
+    customerKvk: { type: "string" },
+    customerVatNumber: { type: "string" },
+    type: { type: "string", enum: ["income", "expense"] },
+    category: { type: "string" },
+    amountExVat: { type: "number" },
+    amountVat: { type: "number" },
+    amountInclVat: { type: "number" },
+    vatRate: { type: "number", enum: [0, 9, 21] },
+    vatLines: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          category: { type: "string" },
+          amountExVat: { type: "number" },
+          vatRate: { type: "number", enum: [0, 9, 21] },
+        },
+        required: ["category", "amountExVat", "vatRate"],
+      },
+    },
+    status: { type: "string", enum: ["paid", "open"] },
+    confidence: { type: "number" },
+    note: { type: "string" },
+  };
+  const invoiceRequired = [
+    "invoiceNumber",
+    "date",
+    "description",
+    "relation",
+    "supplierName",
+    "supplierKvk",
+    "supplierVatNumber",
+    "customerName",
+    "customerKvk",
+    "customerVatNumber",
+    "type",
+    "category",
+    "amountExVat",
+    "amountVat",
+    "amountInclVat",
+    "vatRate",
+    "vatLines",
+    "status",
+    "confidence",
+    "note",
+  ];
   const prompt = [
-    "Lees deze Nederlandse verkoopfactuur, inkoopfactuur, bon of UBL/XML-factuur.",
-    "Geef uitsluitend gegevens terug die nodig zijn om een boeking in BoekBalans voor te stellen.",
+    "Lees deze Nederlandse verkoopfactuur, inkoopfactuur, bon, UBL/XML-factuur of PDF-bundel met meerdere facturen.",
+    "Geef uitsluitend gegevens terug die nodig zijn om boekingen in BoekBalans voor te stellen.",
+    "Als het bestand meerdere facturen bevat, maak dan voor iedere afzonderlijke factuur precies één item in invoices.",
+    "Combineer nooit bedragen van verschillende facturen. Splits scans per zichtbaar factuurnummer, factuurdatum, leverancier/klant of paginagrens.",
+    "Als een pagina geen aparte factuur is maar een vervolgpagina, voeg die gegevens toe aan dezelfde factuur.",
+    "Noem in note kort hoe de factuur is herkend, bijvoorbeeld 'pagina 2' of 'factuurnummer 2026-0161'.",
     "Let strikt op bedragen: amountExVat is de grondslag exclusief btw, amountVat is alleen het btw-bedrag, amountInclVat is het totaal inclusief btw.",
     "Gebruik NOOIT het totaal inclusief btw als amountExVat. Als alleen inclusief btw zichtbaar is, reken amountExVat terug met het gekozen btw-tarief.",
     "Bij een creditfactuur of creditnota moeten amountExVat, amountVat, amountInclVat en vatLines.amountExVat negatief zijn.",
@@ -355,7 +422,7 @@ export async function POST(request: NextRequest) {
     "Als de afnemer overeenkomt met de eigen administratie, is het een inkoopfactuur.",
     "Kies type 'income' voor verkoopfacturen en 'expense' voor inkoopfacturen of bonnetjes.",
     "Kies category bij income uit: Omzet diensten, Omzet producten, Abonnementen, Overige inkomsten.",
-    "Kies category bij expense uit: Inkoop, Uitbesteed werk, Investeringen, Software, Kantoorkosten, Auto- en transportkosten, Huisvestingskosten, Reiskosten, Marketing, Administratiekosten, Bankkosten, Representatiekosten, Telefoonkosten, Verzekeringen, Overige kosten.",
+    "Kies category bij expense uit: Inkoop, Uitbesteed werk, Managementvergoeding, Investeringen, Software, Kantoorkosten, Auto- en transportkosten, Huisvestingskosten, Reiskosten, Marketing, Administratiekosten, Bankkosten, Representatiekosten, Telefoonkosten, Verzekeringen, Overige kosten.",
     "Vul vatLines altijd met de grondslag exclusief btw per btw-percentage. Ook bij verkoopfacturen moet er minimaal één vatLine zijn.",
     "De som van vatLines.amountExVat moet aansluiten op amountExVat.",
     "Gebruik status 'open' voor verkoopfacturen, tenzij betaling duidelijk zichtbaar is. Gebruik bij kosten standaard 'paid', tenzij openstaand duidelijk zichtbaar is.",
@@ -388,67 +455,23 @@ export async function POST(request: NextRequest) {
       text: {
         format: {
           type: "json_schema",
-          name: "boekbalans_invoice_analysis",
+          name: "boekbalans_invoice_batch_analysis",
           strict: true,
           schema: {
             type: "object",
             additionalProperties: false,
             properties: {
-              invoiceNumber: { type: "string" },
-              date: { type: "string", description: "Datum als YYYY-MM-DD" },
-              description: { type: "string" },
-              relation: { type: "string" },
-              supplierName: { type: "string" },
-              supplierKvk: { type: "string" },
-              supplierVatNumber: { type: "string" },
-              customerName: { type: "string" },
-              customerKvk: { type: "string" },
-              customerVatNumber: { type: "string" },
-              type: { type: "string", enum: ["income", "expense"] },
-              category: { type: "string" },
-              amountExVat: { type: "number" },
-              amountVat: { type: "number" },
-              amountInclVat: { type: "number" },
-              vatRate: { type: "number", enum: [0, 9, 21] },
-              vatLines: {
+              invoices: {
                 type: "array",
                 items: {
                   type: "object",
                   additionalProperties: false,
-                  properties: {
-                    category: { type: "string" },
-                    amountExVat: { type: "number" },
-                    vatRate: { type: "number", enum: [0, 9, 21] },
-                  },
-                  required: ["category", "amountExVat", "vatRate"],
+                  properties: invoiceProperties,
+                  required: invoiceRequired,
                 },
               },
-              status: { type: "string", enum: ["paid", "open"] },
-              confidence: { type: "number" },
-              note: { type: "string" },
             },
-            required: [
-              "invoiceNumber",
-              "date",
-              "description",
-              "relation",
-              "supplierName",
-              "supplierKvk",
-              "supplierVatNumber",
-              "customerName",
-              "customerKvk",
-              "customerVatNumber",
-              "type",
-              "category",
-              "amountExVat",
-              "amountVat",
-              "amountInclVat",
-              "vatRate",
-              "vatLines",
-              "status",
-              "confidence",
-              "note",
-            ],
+            required: ["invoices"],
           },
         },
       },
@@ -479,7 +502,14 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    return NextResponse.json({ result: normalizeAnalysis(JSON.parse(outputText), administration) });
+    const results = normalizeAnalysisBatch(JSON.parse(outputText), administration);
+    if (!results.length) {
+      return NextResponse.json(
+        { error: "OpenAI vond geen facturen in dit bestand." },
+        { status: 502 },
+      );
+    }
+    return NextResponse.json({ result: results[0], results });
   } catch {
     return NextResponse.json(
       { error: "OpenAI gaf geen geldig JSON-factuurvoorstel terug." },

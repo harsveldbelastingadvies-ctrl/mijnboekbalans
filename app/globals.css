@@ -19,8 +19,8 @@
 @theme inline {
   --color-background: var(--surface);
   --color-foreground: var(--ink);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: Arial, Helvetica, sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
 * {
@@ -33,7 +33,7 @@ body {
     linear-gradient(315deg, rgba(0, 71, 31, 0.08), transparent 30%),
     var(--surface);
   color: var(--ink);
-  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  font-family: Arial, Helvetica, sans-serif;
 }
 
 button,
@@ -342,6 +342,19 @@ select:focus-visible {
   border-radius: 8px;
   background: #fbfcfb;
   padding: 1rem;
+}
+
+.vat-result-card strong {
+  display: block;
+  margin-top: 0.35rem;
+  color: var(--ink);
+  font-size: 1.25rem;
+  font-weight: 850;
+}
+
+.vat-calculator-grid {
+  display: grid;
+  gap: 0.75rem;
 }
 
 .invoice-upload-panel {
@@ -683,6 +696,11 @@ select:focus-visible {
 
   .vat-tool-grid {
     grid-template-columns: minmax(13rem, 1fr) repeat(3, minmax(9rem, 0.7fr)) minmax(12rem, 0.8fr);
+    align-items: end;
+  }
+
+  .vat-calculator-grid {
+    grid-template-columns: minmax(12rem, 1fr) minmax(9rem, 0.55fr) repeat(3, minmax(9rem, 0.8fr));
     align-items: end;
   }
 
