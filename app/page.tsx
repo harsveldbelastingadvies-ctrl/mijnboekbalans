@@ -12,6 +12,7 @@ import {
 
 type EntryType = "income" | "expense";
 type EntryStatus = "paid" | "open";
+type LoanInterestType = "manual" | "nominal" | "effective";
 type ZvwContributionType = "dga_contribution" | "employer_levy";
 type TabKey =
   | "overview"
@@ -40,6 +41,9 @@ type Entry = {
   depreciationYears?: 5 | 10;
   financingPrincipal?: number;
   financingInterest?: number;
+  loanInterestType?: LoanInterestType;
+  loanAnnualRate?: number;
+  loanBalanceBeforePayment?: number;
   nonDeductibleAmount?: number;
   nonDeductibleNote?: string;
 };
@@ -360,6 +364,9 @@ const emptyEntry = {
   depreciationYears: "none",
   financingPrincipal: "",
   financingInterest: "",
+  loanInterestType: "manual" as LoanInterestType,
+  loanAnnualRate: "",
+  loanBalanceBeforePayment: "",
   nonDeductibleAmount: "",
   nonDeductibleNote: "",
 };
@@ -486,6 +493,33 @@ function calculateFinancingTotalInput(principalInput: string, interestInput: str
   const interest = parseAmountInput(interestInput) ?? 0;
   const total = principal + interest;
   return total !== 0 ? formatDecimalInput(roundCents(total)) : "";
+}
+
+function calculateLoanInterest(
+  paymentAmount: number,
+  balanceBeforePayment: number,
+  annualRatePercent: number,
+  interestType: LoanInterestType,
+) {
+  if (
+    interestType === "manual" ||
+    !Number.isFinite(paymentAmount) ||
+    !Number.isFinite(balanceBeforePayment) ||
+    !Number.isFinite(annualRatePercent) ||
+    paymentAmount <= 0 ||
+    balanceBeforePayment <= 0 ||
+    annualRatePercent <= 0
+  ) {
+    return null;
+  }
+
+  const annualRate = annualRatePercent / 100;
+  const monthlyRate =
+    interestType === "effective"
+      ? Math.pow(1 + annualRate, 1 / 12) - 1
+      : annualRate / 12;
+  const interest = roundCents(balanceBeforePayment * monthlyRate);
+  return Math.min(paymentAmount, Math.max(0, interest));
 }
 
 function getEntryVatAmount(entry: Entry) {
@@ -621,6 +655,9 @@ function formatEntryProcessing(entry: Entry) {
   if (entry.category === loanCategory) {
     parts.push(`Balans ${money.format(entry.financingPrincipal ?? 0)}`);
     parts.push(`Rente W&V ${money.format(getEntryProfitLossAmount(entry))}`);
+    if (entry.loanInterestType && entry.loanInterestType !== "manual" && entry.loanAnnualRate) {
+      parts.push(`${entry.loanInterestType === "effective" ? "effectief" : "nominaal"} ${entry.loanAnnualRate}%`);
+    }
   }
   if (entry.nonDeductibleAmount) {
     parts.push(`Fiscaal bijtellen ${money.format(entry.nonDeductibleAmount)}`);
@@ -1304,6 +1341,25 @@ function buildMonthlySpendableOverview(entries: Entry[], fiscalYear: number, vat
   });
 }
 
+function buildMonthlyFinancialOverview(entries: Entry[], fiscalYear: number, vatDeductionPercent = 100) {
+  const spendableMonths = buildMonthlySpendableOverview(entries, fiscalYear, vatDeductionPercent);
+  return spendableMonths.map((month) => {
+    const monthEntries = entries.filter(
+      (entry) => Number(entry.date.slice(0, 4)) === fiscalYear && getMonthKeyFromDate(entry.date) === month.monthKey,
+    );
+    const summary = calculateTotals(monthEntries, vatDeductionPercent);
+    const vatBalance = summary.vatToPay - summary.vatToClaim;
+    return {
+      ...month,
+      revenue: summary.revenue,
+      costs: summary.costs,
+      profit: summary.revenue - summary.costs,
+      vatBalance,
+      open: summary.open,
+    };
+  });
+}
+
 function getAdminSalaries(admin: Administration) {
   return admin.salaries ?? [];
 }
@@ -1886,6 +1942,37 @@ function buildReportPdf(admin: Administration, summary: Summary, periodLabel: st
   ]);
 }
 
+function buildMonthlyReportPdf(admin: Administration, entries: Entry[], vatDeductionPercent = 100) {
+  const months = buildMonthlyFinancialOverview(entries, admin.fiscalYear, vatDeductionPercent);
+  const activeMonths = months.filter(
+    (month) =>
+      month.revenue !== 0 ||
+      month.costs !== 0 ||
+      month.open !== 0 ||
+      month.paidIncomeInclVat !== 0 ||
+      month.paidExpensesInclVat !== 0,
+  );
+  const rows = (activeMonths.length ? activeMonths : months).map((month) => [
+    month.monthLabel,
+    money.format(month.revenue),
+    money.format(month.costs),
+    money.format(month.profit),
+    money.format(month.vatBalance),
+    money.format(month.open),
+    money.format(month.spendableAfterVatReserve),
+  ]);
+
+  return buildTablePdf(admin, "Maandelijks financieel overzicht", String(admin.fiscalYear), [
+    {
+      title: "Maanden",
+      headers: ["Maand", "Omzet", "Kosten", "Resultaat", "Btw saldo", "Open", "Beschikbaar"],
+      widths: [88, 70, 70, 72, 70, 70, 71],
+      rows,
+      emptyText: "Geen maandgegevens in dit boekjaar.",
+    },
+  ]);
+}
+
 function buildProfitLossPdf(admin: Administration, statement: ProfitLossStatement, periodLabel: string) {
   return buildTablePdf(admin, "Winst- en verliesrekening", periodLabel, [
     {
@@ -2354,6 +2441,12 @@ export default function Home() {
   const financingPrincipal = parseAmountInput(entryForm.financingPrincipal) ?? 0;
   const financingInterest = parseAmountInput(entryForm.financingInterest) ?? 0;
   const financingSplitTotal = financingPrincipal + financingInterest;
+  const calculatedLoanInterest = calculateLoanInterest(
+    parseAmountInput(entryForm.amount) ?? 0,
+    parseAmountInput(entryForm.loanBalanceBeforePayment) ?? 0,
+    parseAmountInput(entryForm.loanAnnualRate) ?? 0,
+    entryForm.loanInterestType,
+  );
   const nonDeductibleAmount = parseAmountInput(entryForm.nonDeductibleAmount) ?? 0;
   const showNonDeductibleTool = entryForm.type === "expense" && !entryUsesSplitVatLines;
   const canDepreciate =
@@ -2482,11 +2575,57 @@ export default function Home() {
     });
   };
 
+  const applyLoanInterestCalculation = (form: typeof entryForm) => {
+    if (
+      form.type !== "expense" ||
+      form.category !== loanCategory ||
+      form.loanInterestType === "manual"
+    ) {
+      return form;
+    }
+
+    const paymentAmount = parseAmountInput(form.amount);
+    const balanceBeforePayment = parseAmountInput(form.loanBalanceBeforePayment);
+    const annualRate = parseAmountInput(form.loanAnnualRate);
+    const interest =
+      paymentAmount !== null && balanceBeforePayment !== null && annualRate !== null
+        ? calculateLoanInterest(
+            paymentAmount,
+            balanceBeforePayment,
+            annualRate,
+            form.loanInterestType,
+          )
+        : null;
+
+    if (paymentAmount === null || interest === null) return form;
+
+    return {
+      ...form,
+      financingInterest: formatDecimalInput(interest),
+      financingPrincipal: formatDecimalInput(roundCents(paymentAmount - interest)),
+      vatLines:
+        form.vatLines.length === 1
+          ? [{ ...form.vatLines[0], amount: form.amount, category: loanCategory }]
+          : form.vatLines,
+    };
+  };
+
+  const updateLoanCalculationField = (
+    field: "loanInterestType" | "loanAnnualRate" | "loanBalanceBeforePayment",
+    value: string,
+  ) => {
+    const nextForm = applyLoanInterestCalculation({
+      ...entryForm,
+      [field]: field === "loanInterestType" ? (value as LoanInterestType) : value,
+    });
+    setEntryForm(nextForm);
+  };
+
   const updateFinancingField = (
     field: "financingPrincipal" | "financingInterest",
     value: string,
   ) => {
-    const nextForm = { ...entryForm, [field]: value };
+    const nextForm = { ...entryForm, [field]: value, loanInterestType: "manual" as LoanInterestType };
     const totalAmount = calculateFinancingTotalInput(
       nextForm.financingPrincipal,
       nextForm.financingInterest,
@@ -2587,6 +2726,14 @@ export default function Home() {
         ? parseOptionalAmountInput(entryForm.financingInterest) ??
           roundCents(amount - (financingPrincipal ?? 0))
         : undefined;
+    const loanAnnualRate =
+      entryForm.type === "expense" && category === loanCategory
+        ? parseOptionalAmountInput(entryForm.loanAnnualRate)
+        : undefined;
+    const loanBalanceBeforePayment =
+      entryForm.type === "expense" && category === loanCategory
+        ? parseOptionalAmountInput(entryForm.loanBalanceBeforePayment)
+        : undefined;
     const nonDeductibleAmount =
       entryForm.type === "expense"
         ? parseOptionalAmountInput(entryForm.nonDeductibleAmount)
@@ -2609,6 +2756,12 @@ export default function Home() {
       depreciationYears,
       financingPrincipal,
       financingInterest,
+      loanInterestType:
+        entryForm.type === "expense" && category === loanCategory
+          ? entryForm.loanInterestType
+          : undefined,
+      loanAnnualRate,
+      loanBalanceBeforePayment,
       nonDeductibleAmount,
       nonDeductibleNote: nonDeductibleNote || undefined,
     };
@@ -3219,6 +3372,15 @@ export default function Home() {
         typeof entry.financingInterest === "number"
           ? String(entry.financingInterest).replace(".", ",")
           : "",
+      loanInterestType: entry.loanInterestType ?? "manual",
+      loanAnnualRate:
+        typeof entry.loanAnnualRate === "number"
+          ? String(entry.loanAnnualRate).replace(".", ",")
+          : "",
+      loanBalanceBeforePayment:
+        typeof entry.loanBalanceBeforePayment === "number"
+          ? String(entry.loanBalanceBeforePayment).replace(".", ",")
+          : "",
       nonDeductibleAmount:
         typeof entry.nonDeductibleAmount === "number"
           ? String(entry.nonDeductibleAmount).replace(".", ",")
@@ -3326,6 +3488,13 @@ export default function Home() {
 
   const downloadReport = () => {
     downloadBlob(`${periodFileBase}-overzicht.pdf`, buildReportPdf(active, summary, periodLabel));
+  };
+
+  const downloadMonthlyReport = () => {
+    downloadBlob(
+      `${administrationFileBase}-maandelijks-financieel-overzicht.pdf`,
+      buildMonthlyReportPdf(active, active.entries, vatDeductionPercent),
+    );
   };
 
   const downloadProfitLoss = () => {
@@ -3649,6 +3818,9 @@ export default function Home() {
                           depreciationYears: "none",
                           financingPrincipal: "",
                           financingInterest: "",
+                          loanInterestType: "manual",
+                          loanAnnualRate: "",
+                          loanBalanceBeforePayment: "",
                           nonDeductibleAmount: "",
                           nonDeductibleNote: "",
                         })
@@ -3667,6 +3839,11 @@ export default function Home() {
                           relation: "",
                           vatLines: [createInvoiceVatLine(entryCategories.expense[0], entryForm.amount, entryForm.vatRate)],
                           depreciationYears: "none",
+                          financingPrincipal: "",
+                          financingInterest: "",
+                          loanInterestType: "manual",
+                          loanAnnualRate: "",
+                          loanBalanceBeforePayment: "",
                         })
                       }
                       type="button"
@@ -3722,7 +3899,7 @@ export default function Home() {
                         onChange={(event) => {
                           const amountInclVat = event.target.value;
                           const amount = calculateExclusiveAmountInput(amountInclVat, entryForm.vatRate);
-                          setEntryForm({
+                          setEntryForm(applyLoanInterestCalculation({
                             ...entryForm,
                             amountInclVat,
                             amount,
@@ -3730,7 +3907,7 @@ export default function Home() {
                               entryForm.vatLines.length === 1
                                 ? [{ ...entryForm.vatLines[0], amount }]
                                 : entryForm.vatLines,
-                          });
+                          }));
                         }}
                       />
                     </Field>
@@ -3748,7 +3925,7 @@ export default function Home() {
                         }
                         onChange={(event) => {
                           const amount = event.target.value;
-                          setEntryForm({
+                          setEntryForm(applyLoanInterestCalculation({
                             ...entryForm,
                             amount,
                             amountInclVat: calculateInclusiveAmountInput(amount, entryForm.vatRate),
@@ -3756,7 +3933,7 @@ export default function Home() {
                               entryForm.vatLines.length === 1
                                 ? [{ ...entryForm.vatLines[0], amount }]
                                 : entryForm.vatLines,
-                          });
+                          }));
                         }}
                       />
                     </Field>
@@ -3770,7 +3947,7 @@ export default function Home() {
                           const amount = entryForm.amountInclVat
                             ? calculateExclusiveAmountInput(entryForm.amountInclVat, vatRate)
                             : entryForm.amount;
-                          setEntryForm({
+                          setEntryForm(applyLoanInterestCalculation({
                             ...entryForm,
                             vatRate,
                             amount,
@@ -3781,7 +3958,7 @@ export default function Home() {
                               entryForm.vatLines.length === 1
                                 ? [{ ...entryForm.vatLines[0], amount, vatRate }]
                                 : entryForm.vatLines,
-                          });
+                          }));
                         }}
                       >
                         <option value="21">21%</option>
@@ -3834,6 +4011,12 @@ export default function Home() {
                               category === loanCategory ? entryForm.financingPrincipal : "",
                             financingInterest:
                               category === loanCategory ? entryForm.financingInterest : "",
+                            loanInterestType:
+                              category === loanCategory ? entryForm.loanInterestType : "manual",
+                            loanAnnualRate:
+                              category === loanCategory ? entryForm.loanAnnualRate : "",
+                            loanBalanceBeforePayment:
+                              category === loanCategory ? entryForm.loanBalanceBeforePayment : "",
                           });
                         }}
                       >
@@ -3932,12 +4115,52 @@ export default function Home() {
                         </div>
                         <span className="status-pill">Balans + W&amp;V</span>
                       </div>
+                      <div className="mt-3 grid gap-3 md:grid-cols-3">
+                        <Field label="Berekening rente">
+                          <select
+                            className="input"
+                            value={entryForm.loanInterestType}
+                            onChange={(event) =>
+                              updateLoanCalculationField("loanInterestType", event.target.value)
+                            }
+                          >
+                            <option value="manual">Handmatig invullen</option>
+                            <option value="nominal">Nominaal percentage</option>
+                            <option value="effective">Effectief percentage</option>
+                          </select>
+                        </Field>
+                        <Field label="Openstaande lening vóór betaling">
+                          <input
+                            className="input"
+                            disabled={entryForm.loanInterestType === "manual"}
+                            inputMode="decimal"
+                            placeholder="Bijv. 18000,00"
+                            value={entryForm.loanBalanceBeforePayment}
+                            onChange={(event) =>
+                              updateLoanCalculationField("loanBalanceBeforePayment", event.target.value)
+                            }
+                          />
+                        </Field>
+                        <Field label="Rentepercentage per jaar">
+                          <input
+                            className="input"
+                            disabled={entryForm.loanInterestType === "manual"}
+                            inputMode="decimal"
+                            placeholder="Bijv. 6,5"
+                            value={entryForm.loanAnnualRate}
+                            onChange={(event) =>
+                              updateLoanCalculationField("loanAnnualRate", event.target.value)
+                            }
+                          />
+                        </Field>
+                      </div>
                       <div className="mt-3 grid gap-3 md:grid-cols-2">
                         <Field label="Aflossing / hoofdsom naar balans">
                           <input
                             className="input"
                             inputMode="decimal"
                             placeholder="Bijv. 750,00"
+                            readOnly={entryForm.loanInterestType !== "manual"}
                             value={entryForm.financingPrincipal}
                             onChange={(event) =>
                               updateFinancingField("financingPrincipal", event.target.value)
@@ -3949,6 +4172,7 @@ export default function Home() {
                             className="input"
                             inputMode="decimal"
                             placeholder="Bijv. 38,50"
+                            readOnly={entryForm.loanInterestType !== "manual"}
                             value={entryForm.financingInterest}
                             onChange={(event) =>
                               updateFinancingField("financingInterest", event.target.value)
@@ -3960,6 +4184,14 @@ export default function Home() {
                         Gesplitst totaal excl. btw: {money.format(financingSplitTotal)} ·
                         alleen {money.format(financingInterest)} komt als kosten in de winst- en verliesrekening.
                       </p>
+                      {entryForm.loanInterestType !== "manual" ? (
+                        <p className="mt-1 text-xs font-medium text-[var(--muted)]">
+                          Berekende maandrente:{" "}
+                          {calculatedLoanInterest === null
+                            ? "vul termijnbedrag, openstaande lening en rentepercentage in"
+                            : money.format(calculatedLoanInterest)}
+                        </p>
+                      ) : null}
                     </div>
                   ) : null}
                   {showNonDeductibleTool ? (
@@ -4537,6 +4769,12 @@ export default function Home() {
                 text="Omzet, kosten, resultaat, btw en open posten in een compact PDF-bestand."
                 button="Download PDF"
                 onClick={downloadReport}
+              />
+              <DownloadCard
+                title="Maandelijks financieel overzicht"
+                text="Omzet, kosten, resultaat, btw, open posten en beschikbare ruimte per maand."
+                button="Download PDF"
+                onClick={downloadMonthlyReport}
               />
               <DownloadCard
                 title="Winst- en verliesrekening"
