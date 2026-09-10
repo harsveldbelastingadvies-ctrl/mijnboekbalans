@@ -38,6 +38,10 @@ type Entry = {
   status: EntryStatus;
   paidDate?: string;
   depreciationYears?: 5 | 10;
+  financingPrincipal?: number;
+  financingInterest?: number;
+  nonDeductibleAmount?: number;
+  nonDeductibleNote?: string;
 };
 
 type Contact = {
@@ -146,6 +150,7 @@ type WorkspaceResponse = {
 
 type ProfitLossStatement = ReturnType<typeof buildProfitLossStatement>;
 type VatOverview = ReturnType<typeof buildVatOverview>;
+type MonthlySpendableOverview = ReturnType<typeof buildMonthlySpendableOverview>;
 
 const storageKey = "boekbalans-administraties-v1";
 
@@ -213,6 +218,8 @@ const laborTaxCreditByYear: Record<
 
 const today = new Date().toISOString().slice(0, 10);
 
+const loanCategory = "Leningen";
+
 const entryCategories: Record<EntryType, string[]> = {
   income: [
     "Omzet diensten",
@@ -225,6 +232,7 @@ const entryCategories: Record<EntryType, string[]> = {
     "Uitbesteed werk",
     "Managementvergoeding",
     "Investeringen",
+    loanCategory,
     "Software",
     "Kantoorkosten",
     "Auto- en transportkosten",
@@ -350,6 +358,10 @@ const emptyEntry = {
   status: "paid" as EntryStatus,
   paidDate: "",
   depreciationYears: "none",
+  financingPrincipal: "",
+  financingInterest: "",
+  nonDeductibleAmount: "",
+  nonDeductibleNote: "",
 };
 
 const emptyContact = {
@@ -462,6 +474,38 @@ function parseAmountInput(value: string) {
   return parseDecimal(value.toString());
 }
 
+function parseOptionalAmountInput(value: string) {
+  const amount = parseAmountInput(value);
+  return amount !== null && Number.isFinite(amount) && amount !== 0
+    ? amount
+    : undefined;
+}
+
+function calculateFinancingTotalInput(principalInput: string, interestInput: string) {
+  const principal = parseAmountInput(principalInput) ?? 0;
+  const interest = parseAmountInput(interestInput) ?? 0;
+  const total = principal + interest;
+  return total !== 0 ? formatDecimalInput(roundCents(total)) : "";
+}
+
+function getEntryVatAmount(entry: Entry) {
+  return entry.amount * (entry.vatRate / 100);
+}
+
+function getEntryTotalInclVat(entry: Entry) {
+  return entry.amount + getEntryVatAmount(entry);
+}
+
+function getEntryProfitLossAmount(entry: Entry) {
+  if (entry.type !== "expense") return entry.amount;
+  if (entry.category !== loanCategory) return entry.amount;
+  if (typeof entry.financingInterest === "number") return entry.financingInterest;
+  if (typeof entry.financingPrincipal === "number") {
+    return roundCents(entry.amount - entry.financingPrincipal);
+  }
+  return entry.amount;
+}
+
 function sourceLooksLikeCreditInvoice(source: string) {
   return /\b(credit(?:factuur|nota)?|creditnota|creditfactuur|credit\s+invoice|refund)\b/i.test(source);
 }
@@ -570,6 +614,21 @@ function formatSignedEntryAmount(entry: Entry) {
   const signedAmount = entry.type === "income" ? entry.amount : -entry.amount;
   const prefix = signedAmount >= 0 ? "+" : "-";
   return `${prefix} ${money.format(Math.abs(signedAmount))}`;
+}
+
+function formatEntryProcessing(entry: Entry) {
+  const parts: string[] = [];
+  if (entry.category === loanCategory) {
+    parts.push(`Balans ${money.format(entry.financingPrincipal ?? 0)}`);
+    parts.push(`Rente W&V ${money.format(getEntryProfitLossAmount(entry))}`);
+  }
+  if (entry.nonDeductibleAmount) {
+    parts.push(`Fiscaal bijtellen ${money.format(entry.nonDeductibleAmount)}`);
+  }
+  if (entry.depreciationYears) {
+    parts.push(`${entry.depreciationYears} jaar afschrijving`);
+  }
+  return parts.length ? parts.join(" · ") : "-";
 }
 
 function createInvoiceVatLine(
@@ -969,8 +1028,9 @@ function calculateTotals(entries: Entry[], vatDeductionPercent = 100) {
   const inputVatDeductionFactor = clampPercent(vatDeductionPercent) / 100;
   return entries.reduce(
     (acc, entry) => {
-      const vat = entry.amount * (entry.vatRate / 100);
-      const total = entry.amount + vat;
+      const vat = getEntryVatAmount(entry);
+      const total = getEntryTotalInclVat(entry);
+      const profitLossAmount = getEntryProfitLossAmount(entry);
       const deductibleInputVat =
         entry.type === "expense" ? vat * inputVatDeductionFactor : 0;
       const nonDeductibleVat =
@@ -985,14 +1045,19 @@ function calculateTotals(entries: Entry[], vatDeductionPercent = 100) {
         acc.vatToPay += vat;
         acc.incomeCount += 1;
       } else {
-        acc.costs += entry.amount + nonDeductibleVat;
+        acc.costs += profitLossAmount + nonDeductibleVat;
         acc.expenseAmountExVat += entry.amount;
         acc.inputVatTotal += vat;
         acc.vatToClaim += deductibleInputVat;
         acc.nonDeductibleVat += nonDeductibleVat;
+        acc.nonDeductibleCosts += entry.nonDeductibleAmount ?? 0;
         acc.expenseCount += 1;
         acc.annualDepreciation += annualDepreciation;
         if (entry.depreciationYears) acc.depreciationCount += 1;
+        if (entry.category === loanCategory) {
+          acc.loanPrincipalTotal += entry.financingPrincipal ?? 0;
+          acc.loanInterestTotal += profitLossAmount;
+        }
       }
 
       if (entry.status === "open") {
@@ -1010,12 +1075,15 @@ function calculateTotals(entries: Entry[], vatDeductionPercent = 100) {
       vatToClaim: 0,
       inputVatTotal: 0,
       nonDeductibleVat: 0,
+      nonDeductibleCosts: 0,
       open: 0,
       incomeCount: 0,
       expenseCount: 0,
       openCount: 0,
       annualDepreciation: 0,
       depreciationCount: 0,
+      loanPrincipalTotal: 0,
+      loanInterestTotal: 0,
     },
   );
 }
@@ -1064,7 +1132,8 @@ function groupEntriesByCategory(
   entries
     .filter((entry) => entry.type === type && includeEntry(entry))
     .forEach((entry) => {
-      totals.set(entry.category, (totals.get(entry.category) ?? 0) + entry.amount);
+      const amount = type === "expense" ? getEntryProfitLossAmount(entry) : entry.amount;
+      totals.set(entry.category, (totals.get(entry.category) ?? 0) + amount);
     });
 
   return Array.from(totals, ([label, amount]) => ({ label, amount }))
@@ -1088,6 +1157,7 @@ function buildProfitLossStatement(entries: Entry[], vatDeductionPercent = 100) {
     summary.nonDeductibleVat;
   const profitBeforeDepreciation = summary.revenue - expenseTotal;
   const profitAfterDepreciation = profitBeforeDepreciation - summary.annualDepreciation;
+  const fiscalProfit = profitAfterDepreciation + summary.nonDeductibleCosts;
 
   return {
     revenueLines,
@@ -1095,9 +1165,13 @@ function buildProfitLossStatement(entries: Entry[], vatDeductionPercent = 100) {
     revenueTotal: summary.revenue,
     expenseTotal,
     nonDeductibleVat: summary.nonDeductibleVat,
+    nonDeductibleCosts: summary.nonDeductibleCosts,
     depreciation: summary.annualDepreciation,
+    loanPrincipalTotal: summary.loanPrincipalTotal,
+    loanInterestTotal: summary.loanInterestTotal,
     profitBeforeDepreciation,
     profitAfterDepreciation,
+    fiscalProfit,
   };
 }
 
@@ -1161,6 +1235,73 @@ function buildVatOverview(entries: Entry[], vatDeductionPercent = 100) {
     vatBalance,
     vatDeductionPercent: clampPercent(vatDeductionPercent),
   };
+}
+
+function getMonthKeyFromDate(date: string) {
+  return /^\d{4}-\d{2}/.test(date) ? date.slice(0, 7) : "";
+}
+
+function getMonthLabel(monthKey: string) {
+  const [year, month] = monthKey.split("-");
+  if (!year || !month) return monthKey;
+  return new Date(Number(year), Number(month) - 1, 1).toLocaleDateString("nl-NL", {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function buildMonthlySpendableOverview(entries: Entry[], fiscalYear: number, vatDeductionPercent = 100) {
+  const inputVatDeductionFactor = clampPercent(vatDeductionPercent) / 100;
+  const months = Array.from({ length: 12 }, (_, index) => {
+    const monthKey = `${fiscalYear}-${String(index + 1).padStart(2, "0")}`;
+    return {
+      monthKey,
+      monthLabel: getMonthLabel(monthKey),
+      paidIncomeInclVat: 0,
+      paidExpensesInclVat: 0,
+      vatReserve: 0,
+      openIncomeInclVat: 0,
+      openExpenseInclVat: 0,
+      spendableBeforeTax: 0,
+      spendableAfterVatReserve: 0,
+    };
+  });
+  const byMonth = new Map(months.map((month) => [month.monthKey, month]));
+
+  entries.forEach((entry) => {
+    const invoiceMonth = getMonthKeyFromDate(entry.date);
+    const paymentMonth = getMonthKeyFromDate(entry.paidDate || entry.date);
+    const totalInclVat = getEntryTotalInclVat(entry);
+    const vat = getEntryVatAmount(entry);
+
+    if (entry.status === "open") {
+      const openMonth = byMonth.get(invoiceMonth);
+      if (!openMonth) return;
+      if (entry.type === "income") openMonth.openIncomeInclVat += totalInclVat;
+      if (entry.type === "expense") openMonth.openExpenseInclVat += totalInclVat;
+      return;
+    }
+
+    const paidMonth = byMonth.get(paymentMonth);
+    if (!paidMonth) return;
+    if (entry.type === "income") {
+      paidMonth.paidIncomeInclVat += totalInclVat;
+      paidMonth.vatReserve += vat;
+    } else {
+      paidMonth.paidExpensesInclVat += totalInclVat;
+      paidMonth.vatReserve -= vat * inputVatDeductionFactor;
+    }
+  });
+
+  return months.map((month) => {
+    const spendableBeforeTax = month.paidIncomeInclVat - month.paidExpensesInclVat;
+    const spendableAfterVatReserve = spendableBeforeTax - Math.max(0, month.vatReserve);
+    return {
+      ...month,
+      spendableBeforeTax,
+      spendableAfterVatReserve,
+    };
+  });
 }
 
 function getAdminSalaries(admin: Administration) {
@@ -1775,6 +1916,10 @@ function buildProfitLossPdf(admin: Administration, statement: ProfitLossStatemen
       rows: [
         ["Resultaat voor afschrijving", money.format(statement.profitBeforeDepreciation)],
         ["Resultaat na afschrijving", money.format(statement.profitAfterDepreciation)],
+        ["Fiscaal bij te tellen kosten", money.format(statement.nonDeductibleCosts)],
+        ["Fiscaal resultaat", money.format(statement.fiscalProfit)],
+        ["Aflossing/hoofdsom naar balans", money.format(statement.loanPrincipalTotal)],
+        ["Rente leningen in W&V", money.format(statement.loanInterestTotal)],
       ],
     },
   ]);
@@ -1838,8 +1983,8 @@ function buildEntriesPdf(admin: Administration, entries: Entry[], periodLabel: s
   return buildTablePdf(admin, "Boekingen", periodLabel, [
     {
       title: "Boekingen",
-      headers: ["Relatie", "Datum", "Factuur", "Omschrijving", "Excl.", "Btw", "Status", "Betaaldatum", "Soort", "Categorie"],
-      widths: [68, 40, 48, 86, 45, 30, 42, 50, 44, 58],
+      headers: ["Relatie", "Datum", "Factuur", "Omschrijving", "Excl.", "Btw", "Status", "Soort", "Categorie", "Verwerking"],
+      widths: [58, 38, 42, 68, 43, 26, 36, 38, 50, 112],
       rows: entries.map((entry) => [
         entry.relation,
         entry.date,
@@ -1847,10 +1992,10 @@ function buildEntriesPdf(admin: Administration, entries: Entry[], periodLabel: s
         entry.description,
         money.format(entry.amount),
         `${entry.vatRate}%`,
-        entry.status === "paid" ? "Betaald" : "Open",
-        entry.status === "paid" ? entry.paidDate || "-" : "-",
+        entry.status === "paid" ? `Betaald ${entry.paidDate || ""}` : "Open",
         entry.type === "income" ? "Inkomsten" : "Uitgaven",
         entry.category,
+        formatEntryProcessing(entry),
       ]),
       emptyText: "Geen boekingen in deze periode.",
     },
@@ -2172,6 +2317,10 @@ export default function Home() {
     () => buildVatOverview(filteredEntries, vatDeductionPercent),
     [filteredEntries, vatDeductionPercent],
   );
+  const monthlySpendableOverview = useMemo(
+    () => buildMonthlySpendableOverview(active.entries, active.fiscalYear, vatDeductionPercent),
+    [active.entries, active.fiscalYear, vatDeductionPercent],
+  );
   const profit = summary.revenue - summary.costs;
   const vatBalance = summary.vatToPay - summary.vatToClaim;
   const administrationFileBase = `${safeFileName(active.name) || "boekbalans"}-${active.fiscalYear}`;
@@ -2200,6 +2349,13 @@ export default function Home() {
   const showDepreciation =
     entryForm.type === "expense" &&
     (entryForm.category === "Investeringen" || investmentVatLinesTotal > 0);
+  const showFinancingTool =
+    entryForm.type === "expense" && entryForm.category === loanCategory && !entryUsesSplitVatLines;
+  const financingPrincipal = parseAmountInput(entryForm.financingPrincipal) ?? 0;
+  const financingInterest = parseAmountInput(entryForm.financingInterest) ?? 0;
+  const financingSplitTotal = financingPrincipal + financingInterest;
+  const nonDeductibleAmount = parseAmountInput(entryForm.nonDeductibleAmount) ?? 0;
+  const showNonDeductibleTool = entryForm.type === "expense" && !entryUsesSplitVatLines;
   const canDepreciate =
     showDepreciation &&
     (entryUsesSplitVatLines
@@ -2326,6 +2482,25 @@ export default function Home() {
     });
   };
 
+  const updateFinancingField = (
+    field: "financingPrincipal" | "financingInterest",
+    value: string,
+  ) => {
+    const nextForm = { ...entryForm, [field]: value };
+    const totalAmount = calculateFinancingTotalInput(
+      nextForm.financingPrincipal,
+      nextForm.financingInterest,
+    );
+    if (totalAmount) {
+      nextForm.amount = totalAmount;
+      nextForm.amountInclVat = calculateInclusiveAmountInput(totalAmount, nextForm.vatRate);
+      if (nextForm.vatLines.length === 1) {
+        nextForm.vatLines = [{ ...nextForm.vatLines[0], amount: totalAmount, category: loanCategory }];
+      }
+    }
+    setEntryForm(nextForm);
+  };
+
   const addEntry = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const amount = parseAmountInput(entryForm.amount);
@@ -2403,6 +2578,21 @@ export default function Home() {
       entryForm.depreciationYears !== "none"
         ? (Number(entryForm.depreciationYears) as 5 | 10)
         : undefined;
+    const financingPrincipal =
+      entryForm.type === "expense" && category === loanCategory
+        ? parseOptionalAmountInput(entryForm.financingPrincipal) ?? 0
+        : undefined;
+    const financingInterest =
+      entryForm.type === "expense" && category === loanCategory
+        ? parseOptionalAmountInput(entryForm.financingInterest) ??
+          roundCents(amount - (financingPrincipal ?? 0))
+        : undefined;
+    const nonDeductibleAmount =
+      entryForm.type === "expense"
+        ? parseOptionalAmountInput(entryForm.nonDeductibleAmount)
+        : undefined;
+    const nonDeductibleNote =
+      entryForm.type === "expense" ? entryForm.nonDeductibleNote.trim() : "";
 
     const entry: Entry = {
       id: editingEntryId ?? uid(),
@@ -2417,6 +2607,10 @@ export default function Home() {
       status: entryForm.status,
       paidDate: entryForm.status === "paid" ? entryForm.paidDate || entryForm.date : undefined,
       depreciationYears,
+      financingPrincipal,
+      financingInterest,
+      nonDeductibleAmount,
+      nonDeductibleNote: nonDeductibleNote || undefined,
     };
 
     updateActive({
@@ -3017,6 +3211,19 @@ export default function Home() {
       status: entry.status,
       paidDate: entry.paidDate ?? "",
       depreciationYears: entry.depreciationYears ? String(entry.depreciationYears) : "none",
+      financingPrincipal:
+        typeof entry.financingPrincipal === "number"
+          ? String(entry.financingPrincipal).replace(".", ",")
+          : "",
+      financingInterest:
+        typeof entry.financingInterest === "number"
+          ? String(entry.financingInterest).replace(".", ",")
+          : "",
+      nonDeductibleAmount:
+        typeof entry.nonDeductibleAmount === "number"
+          ? String(entry.nonDeductibleAmount).replace(".", ",")
+          : "",
+      nonDeductibleNote: entry.nonDeductibleNote ?? "",
     });
     setEditingEntryId(entry.id);
     setTab("entries");
@@ -3440,6 +3647,10 @@ export default function Home() {
                           relation: "",
                           vatLines: [createInvoiceVatLine(entryCategories.expense[0], "", "21")],
                           depreciationYears: "none",
+                          financingPrincipal: "",
+                          financingInterest: "",
+                          nonDeductibleAmount: "",
+                          nonDeductibleNote: "",
                         })
                       }
                       type="button"
@@ -3619,6 +3830,10 @@ export default function Home() {
                                 ? [{ ...entryForm.vatLines[0], category }]
                                 : entryForm.vatLines,
                             depreciationYears: category === "Investeringen" ? entryForm.depreciationYears : "none",
+                            financingPrincipal:
+                              category === loanCategory ? entryForm.financingPrincipal : "",
+                            financingInterest:
+                              category === loanCategory ? entryForm.financingInterest : "",
                           });
                         }}
                       >
@@ -3706,6 +3921,101 @@ export default function Home() {
                           Splitsen kan bij een nieuwe uitgave. Een bestaande boeking bewerken blijft één regel.
                         </p>
                       ) : null}
+                    </div>
+                  ) : null}
+                  {showFinancingTool ? (
+                    <div className="entry-vat-lines">
+                      <div className="section-title">
+                        <div>
+                          <p className="eyebrow">Leningen</p>
+                          <h4>Splits aflossing en rente</h4>
+                        </div>
+                        <span className="status-pill">Balans + W&amp;V</span>
+                      </div>
+                      <div className="mt-3 grid gap-3 md:grid-cols-2">
+                        <Field label="Aflossing / hoofdsom naar balans">
+                          <input
+                            className="input"
+                            inputMode="decimal"
+                            placeholder="Bijv. 750,00"
+                            value={entryForm.financingPrincipal}
+                            onChange={(event) =>
+                              updateFinancingField("financingPrincipal", event.target.value)
+                            }
+                          />
+                        </Field>
+                        <Field label="Rente naar winst-en-verlies">
+                          <input
+                            className="input"
+                            inputMode="decimal"
+                            placeholder="Bijv. 38,50"
+                            value={entryForm.financingInterest}
+                            onChange={(event) =>
+                              updateFinancingField("financingInterest", event.target.value)
+                            }
+                          />
+                        </Field>
+                      </div>
+                      <p className="mt-3 text-sm font-semibold text-[var(--muted)]">
+                        Gesplitst totaal excl. btw: {money.format(financingSplitTotal)} ·
+                        alleen {money.format(financingInterest)} komt als kosten in de winst- en verliesrekening.
+                      </p>
+                    </div>
+                  ) : null}
+                  {showNonDeductibleTool ? (
+                    <div className="entry-vat-lines">
+                      <div className="section-title">
+                        <div>
+                          <p className="eyebrow">Fiscaal</p>
+                          <h4>Niet-aftrekbare kosten</h4>
+                        </div>
+                        <label className="mini-toggle">
+                          <input
+                            checked={Boolean(entryForm.nonDeductibleAmount || entryForm.nonDeductibleNote)}
+                            onChange={(event) =>
+                              setEntryForm({
+                                ...entryForm,
+                                nonDeductibleAmount: event.target.checked ? entryForm.amount : "",
+                                nonDeductibleNote: event.target.checked ? entryForm.nonDeductibleNote : "",
+                              })
+                            }
+                            type="checkbox"
+                          />
+                          <span>Toepassen</span>
+                        </label>
+                      </div>
+                      <div className="mt-3 grid gap-3 md:grid-cols-[0.45fr_1fr]">
+                        <Field label="Fiscaal bij te tellen bedrag">
+                          <input
+                            className="input"
+                            inputMode="decimal"
+                            placeholder="Bijv. 120,00"
+                            value={entryForm.nonDeductibleAmount}
+                            onChange={(event) =>
+                              setEntryForm({
+                                ...entryForm,
+                                nonDeductibleAmount: event.target.value,
+                              })
+                            }
+                          />
+                        </Field>
+                        <Field label="Toelichting">
+                          <input
+                            className="input"
+                            placeholder="Bijv. privédeel, boete of beperkt aftrekbaar"
+                            value={entryForm.nonDeductibleNote}
+                            onChange={(event) =>
+                              setEntryForm({
+                                ...entryForm,
+                                nonDeductibleNote: event.target.value,
+                              })
+                            }
+                          />
+                        </Field>
+                      </div>
+                      <p className="mt-3 text-sm font-semibold text-[var(--muted)]">
+                        Fiscale bijtelling voor deze boeking: {money.format(nonDeductibleAmount)}
+                      </p>
                     </div>
                   ) : null}
                   {showDepreciation && (
@@ -4358,6 +4668,31 @@ export default function Home() {
                 </div>
               </section>
               <ProfitLossPanel statement={profitLossStatement} periodLabel={periodLabel} />
+              <section className="panel xl:col-span-3">
+                <div className="section-title">
+                  <div>
+                    <p className="eyebrow">Balans en fiscaal · {periodLabel}</p>
+                    <h3>Leningen en bijtellingen</h3>
+                  </div>
+                </div>
+                <div className="mt-5 grid gap-3 md:grid-cols-3">
+                  <Metric
+                    label="Aflossing naar balans"
+                    value={money.format(profitLossStatement.loanPrincipalTotal)}
+                    accent="teal"
+                  />
+                  <Metric
+                    label="Rente in W&V"
+                    value={money.format(profitLossStatement.loanInterestTotal)}
+                    accent="blue"
+                  />
+                  <Metric
+                    label="Fiscaal bij te tellen"
+                    value={money.format(profitLossStatement.nonDeductibleCosts)}
+                    accent="yellow"
+                  />
+                </div>
+              </section>
               <section className="panel xl:col-span-2">
                 <div className="section-title">
                   <div>
@@ -4381,6 +4716,7 @@ export default function Home() {
                     : "Nog geen investeringen met afschrijving vastgelegd."}
                 </p>
               </section>
+              <MonthlySpendablePanel months={monthlySpendableOverview} />
               <QuarterOverview quarters={quarterSummaries} />
               <section className="panel">
                 <p className="eyebrow">Eigen kopie</p>
@@ -4799,6 +5135,20 @@ function ProfitLossPanel({
                 {money.format(statement.profitAfterDepreciation)}
               </dd>
             </div>
+            <div className="summary-line">
+              <dt>Fiscaal bij te tellen</dt>
+              <dd>{money.format(statement.nonDeductibleCosts)}</dd>
+            </div>
+            <div className="summary-line">
+              <dt>Fiscaal resultaat</dt>
+              <dd className={statement.fiscalProfit >= 0 ? "amount-positive" : "amount-negative"}>
+                {money.format(statement.fiscalProfit)}
+              </dd>
+            </div>
+            <div className="summary-line">
+              <dt>Aflossing naar balans</dt>
+              <dd>{money.format(statement.loanPrincipalTotal)}</dd>
+            </div>
           </dl>
         </div>
       </div>
@@ -4836,6 +5186,65 @@ function StatementTotal({ label, value }: { label: string; value: string }) {
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
+  );
+}
+
+function MonthlySpendablePanel({ months }: { months: MonthlySpendableOverview }) {
+  const activeMonths = months.filter(
+    (month) =>
+      month.paidIncomeInclVat !== 0 ||
+      month.paidExpensesInclVat !== 0 ||
+      month.openIncomeInclVat !== 0 ||
+      month.openExpenseInclVat !== 0,
+  );
+  const visibleMonths = activeMonths.length ? activeMonths : months.slice(0, 3);
+
+  return (
+    <section className="panel xl:col-span-3">
+      <div className="section-title">
+        <div>
+          <p className="eyebrow">Advies</p>
+          <h3>Netto te besteden per maand</h3>
+        </div>
+      </div>
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full min-w-[880px] border-collapse text-left text-sm">
+          <thead>
+            <tr className="border-b border-[var(--line)] text-xs font-bold uppercase text-[var(--muted)]">
+              <th className="py-3 pr-3">Maand</th>
+              <th className="py-3 pr-3">Ontvangen omzet</th>
+              <th className="py-3 pr-3">Betaalde uitgaven</th>
+              <th className="py-3 pr-3">Btw reserveren</th>
+              <th className="py-3 pr-3">Beschikbaar</th>
+              <th className="py-3 pr-3">Nog open omzet</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visibleMonths.map((month) => (
+              <tr className="border-b border-[var(--line)] last:border-b-0" key={month.monthKey}>
+                <td className="py-3 pr-3 font-semibold capitalize">{month.monthLabel}</td>
+                <td className="py-3 pr-3">{money.format(month.paidIncomeInclVat)}</td>
+                <td className="py-3 pr-3">{money.format(month.paidExpensesInclVat)}</td>
+                <td className="py-3 pr-3">{money.format(Math.max(0, month.vatReserve))}</td>
+                <td className="py-3 pr-3">
+                  <strong className={month.spendableAfterVatReserve >= 0 ? "amount-positive" : "amount-negative"}>
+                    {money.format(month.spendableAfterVatReserve)}
+                  </strong>
+                </td>
+                <td className="py-3 pr-3">
+                  <span className={month.openIncomeInclVat > 0 ? "amount-positive" : ""}>
+                    {money.format(month.openIncomeInclVat)}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
+        Open verkoopfacturen worden apart getoond en tellen pas mee zodra ze als betaald zijn geregistreerd.
+      </p>
+    </section>
   );
 }
 
@@ -4967,7 +5376,7 @@ function EntryTable({
         </button>
       </div>
       <div className="mt-4 overflow-x-auto">
-        <table className="w-full min-w-[1120px] border-collapse text-left text-sm">
+        <table className="w-full min-w-[1240px] border-collapse text-left text-sm">
           <thead>
             <tr className="border-b border-[var(--line)] text-xs font-bold uppercase text-[var(--muted)]">
               <th className="py-3 pr-3">Relatie</th>
@@ -4979,6 +5388,7 @@ function EntryTable({
               <th className="py-3 pr-3">Status</th>
               <th className="py-3 pr-3">Soort</th>
               <th className="py-3 pr-3">Categorie</th>
+              <th className="py-3 pr-3">Verwerking</th>
               <th className="py-3 pr-3">Afschrijving</th>
               <th className="py-3 pr-3">Actie</th>
             </tr>
@@ -5002,6 +5412,14 @@ function EntryTable({
                 </td>
                 <td className="py-3 pr-3">{entry.type === "income" ? "Inkomsten" : "Uitgaven"}</td>
                 <td className="py-3 pr-3">{entry.category}</td>
+                <td className="py-3 pr-3">
+                  <span className="text-xs font-semibold text-[var(--muted)]">
+                    {formatEntryProcessing(entry)}
+                  </span>
+                  {entry.nonDeductibleNote ? (
+                    <span className="block text-xs text-[var(--muted)]">{entry.nonDeductibleNote}</span>
+                  ) : null}
+                </td>
                 <td className="py-3 pr-3">
                   {entry.depreciationYears
                     ? `${entry.depreciationYears} jaar · ${money.format(entry.amount / entry.depreciationYears)} p.j.`

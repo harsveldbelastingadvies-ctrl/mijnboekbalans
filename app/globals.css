@@ -337,6 +337,25 @@ select:focus-visible {
   accent-color: var(--teal);
 }
 
+.mini-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  padding: 0.5rem 0.65rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.mini-toggle input {
+  width: 0.95rem;
+  height: 0.95rem;
+  accent-color: var(--teal);
+}
+
 .vat-result-card {
   border: 1px solid rgba(0, 71, 31, 0.18);
   border-radius: 8px;
