@@ -46,6 +46,7 @@ type Entry = {
   loanBalanceBeforePayment?: number;
   nonDeductibleAmount?: number;
   nonDeductibleNote?: string;
+  salaryRecordId?: string;
 };
 
 type Contact = {
@@ -223,6 +224,7 @@ const laborTaxCreditByYear: Record<
 const today = new Date().toISOString().slice(0, 10);
 
 const loanCategory = "Leningen";
+const dgaSalaryCategory = "DGA-salaris";
 
 const entryCategories: Record<EntryType, string[]> = {
   income: [
@@ -235,6 +237,7 @@ const entryCategories: Record<EntryType, string[]> = {
     "Inkoop",
     "Uitbesteed werk",
     "Managementvergoeding",
+    dgaSalaryCategory,
     "Investeringen",
     loanCategory,
     "Software",
@@ -664,6 +667,9 @@ function formatEntryProcessing(entry: Entry) {
   }
   if (entry.depreciationYears) {
     parts.push(`${entry.depreciationYears} jaar afschrijving`);
+  }
+  if (entry.salaryRecordId) {
+    parts.push("Salarisboeking");
   }
   return parts.length ? parts.join(" · ") : "-";
 }
@@ -1415,6 +1421,44 @@ function getSalaryZvwContribution(salary: SalaryRecord, fallbackFiscalYear: numb
 function getSalaryZvwLabel(salary: SalaryRecord, fallbackFiscalYear: number) {
   const type = normalizeZvwContributionType(salary.zvwContributionType);
   return `${getZvwShortLabel(type)} (${getZvwRateLabel(getSalaryYear(salary.period) || fallbackFiscalYear, type)})`;
+}
+
+function getSalaryEmployerCost(salary: SalaryRecord, fallbackFiscalYear: number) {
+  const type = normalizeZvwContributionType(salary.zvwContributionType);
+  const employerZvw =
+    type === "employer_levy" ? getSalaryZvwContribution(salary, fallbackFiscalYear) : 0;
+  return roundCents(salary.grossSalary + employerZvw);
+}
+
+function buildSalaryExpenseEntry(
+  admin: Administration,
+  salary: SalaryRecord,
+  existingId?: string,
+): Entry {
+  const salaryYear = getSalaryYear(salary.period) || admin.fiscalYear;
+  const employeeName = getSalaryEmployeeName(admin, salary);
+  const type = normalizeZvwContributionType(salary.zvwContributionType);
+  const employerZvw =
+    type === "employer_levy" ? getSalaryZvwContribution(salary, salaryYear) : 0;
+  const description =
+    employerZvw > 0
+      ? `DGA-salaris ${getSalaryMonthLabel(salary.period)} incl. werkgeversheffing Zvw`
+      : `DGA-salaris ${getSalaryMonthLabel(salary.period)}`;
+
+  return {
+    id: existingId ?? uid(),
+    date: salary.paymentDate || `${salary.period}-01`,
+    invoiceNumber: `LOON-${salary.period}-${safeFileName(employeeName).slice(0, 12)}`,
+    description,
+    relation: employeeName,
+    category: dgaSalaryCategory,
+    type: "expense",
+    amount: getSalaryEmployerCost(salary, salaryYear),
+    vatRate: 0,
+    status: salary.status,
+    paidDate: salary.status === "paid" ? salary.paymentDate || `${salary.period}-01` : undefined,
+    salaryRecordId: salary.id,
+  };
 }
 
 function getSalariesZvwLabel(salaries: SalaryRecord[], fiscalYear: number) {
@@ -2764,6 +2808,9 @@ export default function Home() {
       loanBalanceBeforePayment,
       nonDeductibleAmount,
       nonDeductibleNote: nonDeductibleNote || undefined,
+      salaryRecordId: editingEntryId
+        ? active.entries.find((item) => item.id === editingEntryId)?.salaryRecordId
+        : undefined,
     };
 
     updateActive({
@@ -3163,11 +3210,21 @@ export default function Home() {
       paymentDate: salaryForm.paymentDate,
     };
 
+    const existingSalaryEntry = active.entries.find((entry) => entry.salaryRecordId === salary.id);
+    const entries = existingSalaryEntry
+      ? active.entries.map((entry) =>
+          entry.id === existingSalaryEntry.id
+            ? buildSalaryExpenseEntry(active, salary, entry.id)
+            : entry,
+        )
+      : active.entries;
+
     updateActive({
       ...active,
       salaries: editingSalaryId
         ? activeSalaries.map((item) => (item.id === editingSalaryId ? salary : item))
         : [salary, ...activeSalaries],
+      entries,
     });
     setSalaryForm({ ...emptySalary, period: salaryForm.period });
     setEditingSalaryId(null);
@@ -3292,6 +3349,7 @@ export default function Home() {
     updateActive({
       ...active,
       salaries: activeSalaries.filter((salary) => salary.id !== salaryId),
+      entries: active.entries.filter((entry) => entry.salaryRecordId !== salaryId),
     });
     if (editingSalaryId === salaryId) cancelEditSalary();
   };
@@ -3335,11 +3393,29 @@ export default function Home() {
   };
 
   const markSalaryPaid = (salaryId: string) => {
+    const salaryPaymentDate =
+      activeSalaries.find((salary) => salary.id === salaryId)?.paymentDate || today;
     updateActive({
       ...active,
       salaries: activeSalaries.map((salary) =>
         salary.id === salaryId ? { ...salary, status: "paid" } : salary,
       ),
+      entries: active.entries.map((entry) =>
+        entry.salaryRecordId === salaryId
+          ? { ...entry, status: "paid", paidDate: entry.paidDate || salaryPaymentDate }
+          : entry,
+      ),
+    });
+  };
+
+  const bookSalaryAsExpense = (salary: SalaryRecord) => {
+    const existingSalaryEntry = active.entries.find((entry) => entry.salaryRecordId === salary.id);
+    const salaryEntry = buildSalaryExpenseEntry(active, salary, existingSalaryEntry?.id);
+    updateActive({
+      ...active,
+      entries: existingSalaryEntry
+        ? active.entries.map((entry) => (entry.id === existingSalaryEntry.id ? salaryEntry : entry))
+        : [salaryEntry, ...active.entries],
     });
   };
 
@@ -4569,48 +4645,67 @@ export default function Home() {
                       </tr>
                     </thead>
                     <tbody>
-                      {fiscalYearSalaries.map((salary) => (
-                        <tr className="border-b border-[var(--line)] last:border-b-0" key={salary.id}>
-                          <td className="py-3 pr-3">{getSalaryMonthLabel(salary.period)}</td>
-                          <td className="py-3 pr-3">
-                            <strong>{getSalaryEmployeeName(active, salary)}</strong>
-                            <span className="mt-1 block text-xs text-[var(--muted)]">
-                              {getSalaryEmployeeBirthDate(active, salary) || "Geen geboortedatum"} · {getSalaryEmployeeAddress(active, salary) || "Geen adres"}
-                            </span>
-                            <span className="mt-1 block text-xs text-[var(--muted)]">
-                              Betaaldatum {salary.paymentDate || "-"}
-                            </span>
-                          </td>
-                          <td className="py-3 pr-3">{money.format(salary.grossSalary)}</td>
-                          <td className="py-3 pr-3">{money.format(salary.wageTax)}</td>
-                          <td className="py-3 pr-3">{money.format(salary.netSalary)}</td>
-                          <td className="py-3 pr-3">
-                            <strong>{money.format(getSalaryZvwContribution(salary, active.fiscalYear))}</strong>
-                            <span className="mt-1 block text-xs text-[var(--muted)]">
-                              {getSalaryZvwLabel(salary, active.fiscalYear)}
-                            </span>
-                          </td>
-                          <td className="py-3 pr-3">{salary.status === "paid" ? "Betaald" : "Open"}</td>
-                          <td className="py-3 pr-3">
-                            <div className="flex flex-wrap gap-2">
-                              <button className="ghost-button" onClick={() => downloadPayslip(salary)}>
-                                Loonstrook
-                              </button>
-                              {salary.status === "open" ? (
-                                <button className="ghost-button" onClick={() => markSalaryPaid(salary.id)}>
-                                  Betaald
+                      {fiscalYearSalaries.map((salary) => {
+                        const salaryIsBooked = active.entries.some(
+                          (entry) => entry.salaryRecordId === salary.id,
+                        );
+
+                        return (
+                          <tr className="border-b border-[var(--line)] last:border-b-0" key={salary.id}>
+                            <td className="py-3 pr-3">{getSalaryMonthLabel(salary.period)}</td>
+                            <td className="py-3 pr-3">
+                              <strong>{getSalaryEmployeeName(active, salary)}</strong>
+                              <span className="mt-1 block text-xs text-[var(--muted)]">
+                                {getSalaryEmployeeBirthDate(active, salary) || "Geen geboortedatum"} · {getSalaryEmployeeAddress(active, salary) || "Geen adres"}
+                              </span>
+                              <span className="mt-1 block text-xs text-[var(--muted)]">
+                                Betaaldatum {salary.paymentDate || "-"}
+                              </span>
+                            </td>
+                            <td className="py-3 pr-3">
+                              {money.format(salary.grossSalary)}
+                              <span className="mt-1 block text-xs text-[var(--muted)]">
+                                Kostenpost {money.format(getSalaryEmployerCost(salary, active.fiscalYear))}
+                              </span>
+                            </td>
+                            <td className="py-3 pr-3">{money.format(salary.wageTax)}</td>
+                            <td className="py-3 pr-3">{money.format(salary.netSalary)}</td>
+                            <td className="py-3 pr-3">
+                              <strong>{money.format(getSalaryZvwContribution(salary, active.fiscalYear))}</strong>
+                              <span className="mt-1 block text-xs text-[var(--muted)]">
+                                {getSalaryZvwLabel(salary, active.fiscalYear)}
+                              </span>
+                            </td>
+                            <td className="py-3 pr-3">
+                              <span>{salary.status === "paid" ? "Betaald" : "Open"}</span>
+                              <span className="mt-1 block text-xs text-[var(--muted)]">
+                                {salaryIsBooked ? "Kosten geboekt" : "Nog niet geboekt"}
+                              </span>
+                            </td>
+                            <td className="py-3 pr-3">
+                              <div className="flex flex-wrap gap-2">
+                                <button className="ghost-button" onClick={() => downloadPayslip(salary)}>
+                                  Loonstrook
                                 </button>
-                              ) : null}
-                              <button className="ghost-button" onClick={() => editSalary(salary)}>
-                                Bewerk
-                              </button>
-                              <button className="ghost-button" onClick={() => removeSalary(salary.id)}>
-                                Verwijder
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
+                                <button className="ghost-button" onClick={() => bookSalaryAsExpense(salary)}>
+                                  {salaryIsBooked ? "Boeking bijwerken" : "Boek kosten"}
+                                </button>
+                                {salary.status === "open" ? (
+                                  <button className="ghost-button" onClick={() => markSalaryPaid(salary.id)}>
+                                    Betaald
+                                  </button>
+                                ) : null}
+                                <button className="ghost-button" onClick={() => editSalary(salary)}>
+                                  Bewerk
+                                </button>
+                                <button className="ghost-button" onClick={() => removeSalary(salary.id)}>
+                                  Verwijder
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                   {!fiscalYearSalaries.length && (
