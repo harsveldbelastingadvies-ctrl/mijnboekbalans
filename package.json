@@ -12,6 +12,7 @@
     "deploy:worker": "opennextjs-cloudflare deploy",
     "preview:worker": "opennextjs-cloudflare preview",
     "start": "next start",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern .next --ignore-pattern .open-next"
   },
   "dependencies": {

@@ -79,6 +79,8 @@ type Administration = {
   vatNumber: string;
   wageTaxNumber?: string;
   fiscalYear: number;
+  nextInvoiceNumber?: string;
+  autoInvoiceNumbering?: boolean;
   iban: string;
   entries: Entry[];
   contacts: Contact[];

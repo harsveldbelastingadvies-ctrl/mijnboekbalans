@@ -10,6 +10,8 @@ import {
   useState,
 } from "react";
 
+import { getNextInvoiceNumber, hasDuplicateSalesInvoice, isValidInvoiceSequence } from "./lib/invoice-numbering";
+
 type EntryType = "income" | "expense";
 type EntryStatus = "paid" | "open";
 type LoanInterestType = "manual" | "nominal" | "effective";
@@ -129,6 +131,8 @@ type Administration = {
   vatNumber: string;
   wageTaxNumber?: string;
   fiscalYear: number;
+  nextInvoiceNumber?: string;
+  autoInvoiceNumbering?: boolean;
   iban: string;
   entries: Entry[];
   contacts: Contact[];
@@ -2380,6 +2384,12 @@ export default function Home() {
   }, [administrations, hydrated, workspacePin, workspaceState]);
 
   const active = administrations.find((admin) => admin.id === activeId) ?? administrations[0];
+  const nextSalesInvoiceNumber = getNextInvoiceNumber(active);
+  const useAutomaticInvoiceNumber = entryForm.type === "income" && !editingEntryId && active.autoInvoiceNumbering !== false;
+  const salesInvoiceNumber = useAutomaticInvoiceNumber ? nextSalesInvoiceNumber : entryForm.invoiceNumber.trim();
+  const originalInvoiceNumber = active.entries.find((entry) => entry.id === editingEntryId)?.invoiceNumber?.trim();
+  const duplicateSalesInvoiceNumber = entryForm.type === "income" && salesInvoiceNumber !== originalInvoiceNumber &&
+    hasDuplicateSalesInvoice(active.entries, salesInvoiceNumber, editingEntryId ?? undefined);
   const vatDeductionSettings = getVatDeductionSettings(active);
   const vatDeductionPercent = calculateVatDeductionPercent(vatDeductionSettings);
   const activeSalaries = getAdminSalaries(active);
@@ -2543,7 +2553,12 @@ export default function Home() {
 
   const updateActive = (next: Administration) => {
     setAdministrations((items) =>
-      items.map((admin) => (admin.id === next.id ? next : admin)),
+      items.map((admin) => {
+        if (admin.id !== next.id) return admin;
+        // Retain the next unused number when entries are deleted or corrected.
+        const numbered = { ...next, nextInvoiceNumber: next.nextInvoiceNumber ?? getNextInvoiceNumber(admin) };
+        return { ...numbered, nextInvoiceNumber: getNextInvoiceNumber(numbered) };
+      }),
     );
   };
 
@@ -2686,6 +2701,7 @@ export default function Home() {
 
   const addEntry = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (duplicateSalesInvoiceNumber) return;
     const amount = parseAmountInput(entryForm.amount);
     const validVatLines = getValidInvoiceVatLines({
       ...entryForm,
@@ -2788,7 +2804,7 @@ export default function Home() {
     const entry: Entry = {
       id: editingEntryId ?? uid(),
       date: entryForm.date,
-      invoiceNumber: entryForm.invoiceNumber.trim() || undefined,
+      invoiceNumber: salesInvoiceNumber || undefined,
       description: entryForm.description.trim(),
       relation: entryForm.relation.trim() || "Onbekende relatie",
       category,
@@ -2819,7 +2835,7 @@ export default function Home() {
         ? active.entries.map((item) => (item.id === editingEntryId ? entry : item))
         : [entry, ...active.entries],
     });
-    setEntryForm({ ...emptyEntry, date: entryForm.date });
+    setEntryForm({ ...emptyEntry, date: entryForm.date, type: entryForm.type, category: entryCategories[entryForm.type][0] });
     setEditingEntryId(null);
   };
 
@@ -3948,14 +3964,29 @@ export default function Home() {
                     <Field label="Factuurdatum">
                       <input className="input" type="date" value={entryForm.date} onChange={(event) => setEntryForm({ ...entryForm, date: event.target.value })} />
                     </Field>
-                    <Field label="Factuurnummer">
+                    <div className="grid gap-1 text-sm font-semibold text-[var(--ink)]">
+                      <label htmlFor="entry-invoice-number">Factuurnummer</label>
                       <input
+                        id="entry-invoice-number"
                         className="input"
                         placeholder="Bijv. 2026-0161"
-                        value={entryForm.invoiceNumber}
+                        value={useAutomaticInvoiceNumber ? nextSalesInvoiceNumber : entryForm.invoiceNumber}
+                        readOnly={useAutomaticInvoiceNumber}
+                        aria-invalid={duplicateSalesInvoiceNumber}
                         onChange={(event) => setEntryForm({ ...entryForm, invoiceNumber: event.target.value })}
                       />
-                    </Field>
+                      {entryForm.type === "income" && !editingEntryId && (
+                        <label className="mt-2 flex items-center gap-2 text-xs text-[var(--muted)]">
+                          <input type="checkbox" checked={active.autoInvoiceNumbering !== false}
+                            onChange={(event) => {
+                              updateActive({ ...active, autoInvoiceNumbering: event.target.checked });
+                              setEntryForm({ ...entryForm, invoiceNumber: "" });
+                            }} />
+                          Automatisch doornummeren
+                        </label>
+                      )}
+                      {duplicateSalesInvoiceNumber && <p role="alert" className="mt-2 text-xs text-red-700">Dit verkoopfactuurnummer bestaat al. Gebruik een ander nummer.</p>}
+                    </div>
                     <Field label="Omschrijving">
                       <input className="input" value={entryForm.description} onChange={(event) => setEntryForm({ ...entryForm, description: event.target.value })} />
                     </Field>
@@ -5178,6 +5209,8 @@ export default function Home() {
                   <h3>Administratiegegevens</h3>
                 </div>
               </div>
+              <InvoiceNumberSettings key={`${active.id}-${nextSalesInvoiceNumber}`} nextNumber={nextSalesInvoiceNumber}
+                onSave={(number) => updateActive({ ...active, nextInvoiceNumber: number })} />
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 <Field label="Naam administratie">
                   <input className="input" value={active.name} onChange={(event) => updateSettings("name", event.target.value)} />
@@ -5207,6 +5240,32 @@ export default function Home() {
       </div>
     </main>
     </>
+  );
+}
+
+function InvoiceNumberSettings({ nextNumber, onSave }: { nextNumber: string; onSave: (number: string) => void }) {
+  const [number, setNumber] = useState(nextNumber);
+  const [error, setError] = useState("");
+  return (
+    <form className="mt-5 rounded-xl border border-[var(--line)] p-4" onSubmit={(event) => {
+      event.preventDefault();
+      if (!isValidInvoiceSequence(number)) {
+        setError("Gebruik maximaal 80 tekens en eindig met een cijfer, bijvoorbeeld 2026-0161.");
+        return;
+      }
+      onSave(number.trim());
+      setError("");
+    }}>
+      <Field label="Volgend verkoopfactuurnummer">
+        <div className="flex flex-wrap gap-2">
+          <input className="input flex-1" value={number} maxLength={80} required
+            onChange={(event) => { setNumber(event.target.value); setError(""); }} />
+          <button className="secondary-button" type="submit">Nummering opslaan</button>
+        </div>
+      </Field>
+      <p className="mt-2 text-xs text-[var(--muted)]">Volgend nummer: {nextNumber}. De reeks loopt per administratie door na het opslaan van een inkomstenboeking. Bestaande nummers worden overgeslagen. Voor een nieuwe jaarreeks kun je hier het startnummer aanpassen. Ingelezen facturen houden hun eigen nummer.</p>
+      {error && <p role="alert" className="mt-2 text-xs text-red-700">{error}</p>}
+    </form>
   );
 }
 

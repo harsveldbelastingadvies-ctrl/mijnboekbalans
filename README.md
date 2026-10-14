@@ -24,6 +24,22 @@ alleen als extra vangnet aanwezig.
 - Facturen uploaden als conceptboekingen, met optionele OpenAI-herkenning via een veilige serverkoppeling.
 - Administratiegegevens vastleggen, zoals KvK, btw-nummer, IBAN en boekjaar.
 
+## Automatische verkoopfactuurnummering
+
+Bij een nieuwe inkomstenboeking staat **Automatisch doornummeren** standaard aan.
+BoekBalans stelt het volgende nummer voor op basis van de bestaande verkoopreeks.
+Onder **Instellingen → Volgend verkoopfactuurnummer** kun je het startnummer of
+het begin van een nieuwe jaarreeks instellen, bijvoorbeeld `2027-0001`.
+De teller loopt per administratie door en wordt bij het opslaan verhoogd.
+Verwijderen of corrigeren draait de teller niet terug. Uitgaven en ingelezen
+facturen behouden hun eigen nummer. Zet het vinkje uit om een extern nummer
+handmatig in te voeren. Een dubbel verkoopfactuurnummer wordt geweigerd bij
+het toevoegen of wijzigen van een boeking; ongewijzigde bestaande nummers
+blijven behouden. De bestaande werkruimteopslag is bedoeld voor één gebruiker;
+de teller reserveert geen nummers tussen gelijktijdige browsersessies.
+
+Controleer de nummering met `pnpm test`.
+
 ## Lokaal openen
 
 De app draait nu op:
