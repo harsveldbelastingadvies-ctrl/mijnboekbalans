@@ -28,7 +28,7 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Test invoice numbering
+      - name: Test accounting calculations
         run: pnpm test
 
       - name: Lint

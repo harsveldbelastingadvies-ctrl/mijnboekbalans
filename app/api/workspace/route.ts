@@ -1,10 +1,11 @@
+import type { AccountingEntryFields, PayrollDeclaration, WkrSettings } from "../../lib/payroll-accounting";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { NextRequest, NextResponse } from "next/server";
 
-type Entry = {
+type Entry = AccountingEntryFields & {
   id: string;
   date: string;
   invoiceNumber?: string;
@@ -79,6 +80,8 @@ type Administration = {
   vatNumber: string;
   wageTaxNumber?: string;
   fiscalYear: number;
+  payrollDeclarations?: PayrollDeclaration[];
+  wkrSettingsByYear?: Record<string, WkrSettings>;
   nextInvoiceNumber?: string;
   autoInvoiceNumbering?: boolean;
   iban: string;
