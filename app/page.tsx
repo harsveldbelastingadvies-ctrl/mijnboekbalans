@@ -12,6 +12,9 @@ import {
 
 import { getNextInvoiceNumber, hasDuplicateSalesInvoice, isValidInvoiceSequence } from "./lib/invoice-numbering";
 
+import { PayrollTaxPanel, RcPanel, WkrPanel } from "./components/finance-panels";
+import { companyCashAmount, operatingEntries, vatEntries, filterMonth, monthEnd, monthLabel, syncDeclarationEntries, type AccountingEntryFields, type PayrollDeclaration, type WkrSettings, type FinanceSection } from "./lib/payroll-accounting";
+
 type EntryType = "income" | "expense";
 type EntryStatus = "paid" | "open";
 type LoanInterestType = "manual" | "nominal" | "effective";
@@ -21,6 +24,9 @@ type TabKey =
   | "entries"
   | "invoices"
   | "payroll"
+  | "payrollTax"
+  | "wkr"
+  | "rc"
   | "checks"
   | "reports"
   | "contacts"
@@ -28,7 +34,7 @@ type TabKey =
 type PeriodKey = "year" | "q1" | "q2" | "q3" | "q4";
 type WorkspaceState = "checking" | "setup" | "locked" | "unlocked";
 
-type Entry = {
+type Entry = AccountingEntryFields & {
   id: string;
   date: string;
   invoiceNumber?: string;
@@ -131,6 +137,8 @@ type Administration = {
   vatNumber: string;
   wageTaxNumber?: string;
   fiscalYear: number;
+  payrollDeclarations?: PayrollDeclaration[];
+  wkrSettingsByYear?: Record<string, WkrSettings>;
   nextInvoiceNumber?: string;
   autoInvoiceNumbering?: boolean;
   iban: string;
@@ -242,6 +250,8 @@ const entryCategories: Record<EntryType, string[]> = {
     "Uitbesteed werk",
     "Managementvergoeding",
     dgaSalaryCategory,
+    "Personeelskosten WKR",
+    "Werkgeverslasten loonheffingen",
     "Investeringen",
     loanCategory,
     "Software",
@@ -376,6 +386,10 @@ const emptyEntry = {
   loanBalanceBeforePayment: "",
   nonDeductibleAmount: "",
   nonDeductibleNote: "",
+  paymentMethod: "company",
+  rcDga: "",
+  wkrType: "none",
+  wkrValue: "",
 };
 
 const emptyContact = {
@@ -530,6 +544,7 @@ function calculateLoanInterest(
 }
 
 function getEntryVatAmount(entry: Entry) {
+  if (entry.balanceOnly) return 0;
   return entry.amount * (entry.vatRate / 100);
 }
 
@@ -538,6 +553,7 @@ function getEntryTotalInclVat(entry: Entry) {
 }
 
 function getEntryProfitLossAmount(entry: Entry) {
+  if (entry.balanceOnly) return 0;
   if (entry.type !== "expense") return entry.amount;
   if (entry.category !== loanCategory) return entry.amount;
   if (typeof entry.financingInterest === "number") return entry.financingInterest;
@@ -659,6 +675,10 @@ function formatSignedEntryAmount(entry: Entry) {
 
 function formatEntryProcessing(entry: Entry) {
   const parts: string[] = [];
+  if (entry.balanceOnly) parts.push("Balanspost; geen omzet, kosten of btw");
+  if (entry.rcDga) parts.push(`Rekening-courant ${entry.rcDga}`);
+  if (entry.wkrType) parts.push(entry.wkrType === "free" ? "WKR vrije ruimte" : entry.wkrType === "exempt" ? "WKR gericht vrijgesteld" : "WKR nihilwaardering");
+  if (entry.payrollDeclarationId) parts.push("Via aangifte loonheffingen");
   if (entry.category === loanCategory) {
     parts.push(`Balans ${money.format(entry.financingPrincipal ?? 0)}`);
     parts.push(`Rente W&V ${money.format(getEntryProfitLossAmount(entry))}`);
@@ -1073,8 +1093,9 @@ function calculateVatDeductionPercent(settings: VatDeductionSettings) {
 
 function calculateTotals(entries: Entry[], vatDeductionPercent = 100) {
   const inputVatDeductionFactor = clampPercent(vatDeductionPercent) / 100;
-  return entries.reduce(
+  return operatingEntries(entries).reduce(
     (acc, entry) => {
+      if (entry.balanceOnly) return acc;
       const vat = getEntryVatAmount(entry);
       const total = getEntryTotalInclVat(entry);
       const profitLossAmount = getEntryProfitLossAmount(entry);
@@ -1108,7 +1129,7 @@ function calculateTotals(entries: Entry[], vatDeductionPercent = 100) {
       }
 
       if (entry.status === "open") {
-        acc.open += total;
+        acc.open += entry.salaryRecordId ? entry.cashAmount ?? total : total;
         acc.openCount += 1;
       }
 
@@ -1177,7 +1198,7 @@ function groupEntriesByCategory(
 ) {
   const totals = new Map<string, number>();
   entries
-    .filter((entry) => entry.type === type && includeEntry(entry))
+    .filter((entry) => entry.type === type && !entry.balanceOnly && includeEntry(entry))
     .forEach((entry) => {
       const amount = type === "expense" ? getEntryProfitLossAmount(entry) : entry.amount;
       totals.set(entry.category, (totals.get(entry.category) ?? 0) + amount);
@@ -1231,7 +1252,7 @@ function buildVatOverview(entries: Entry[], vatDeductionPercent = 100) {
     mapAmounts: (entry: Entry) => { basis: number; vat: number; deductibleVat?: number },
   ) => {
     const grouped = new Map<number, { vatRate: number; basis: number; vat: number; deductibleVat: number }>();
-    entries
+    vatEntries(entries)
       .filter((entry) => entry.type === type)
       .forEach((entry) => {
         const amounts = mapAmounts(entry);
@@ -1318,7 +1339,7 @@ function buildMonthlySpendableOverview(entries: Entry[], fiscalYear: number, vat
   entries.forEach((entry) => {
     const invoiceMonth = getMonthKeyFromDate(entry.date);
     const paymentMonth = getMonthKeyFromDate(entry.paidDate || entry.date);
-    const totalInclVat = getEntryTotalInclVat(entry);
+    const totalInclVat = companyCashAmount(entry);
     const vat = getEntryVatAmount(entry);
 
     if (entry.status === "open") {
@@ -1451,7 +1472,8 @@ function buildSalaryExpenseEntry(
 
   return {
     id: existingId ?? uid(),
-    date: salary.paymentDate || `${salary.period}-01`,
+    date: monthEnd(salary.period),
+    cashAmount: salary.netSalary,
     invoiceNumber: `LOON-${salary.period}-${safeFileName(employeeName).slice(0, 12)}`,
     description,
     relation: employeeName,
@@ -2298,6 +2320,7 @@ export default function Home() {
   const [kvkQuery, setKvkQuery] = useState("");
   const [kvkStatus, setKvkStatus] = useState("");
   const [period, setPeriod] = useState<PeriodKey>("year");
+  const [vatPdfMonth, setVatPdfMonth] = useState("period");
   const [workspaceState, setWorkspaceState] = useState<WorkspaceState>("checking");
   const [workspaceProfile, setWorkspaceProfile] = useState<WorkspaceProfile | null>(null);
   const [workspacePin, setWorkspacePin] = useState("");
@@ -2516,10 +2539,10 @@ export default function Home() {
     ["IBAN", active.iban],
   ].filter(([, value]) => !String(value).trim());
   const openEntries = filteredEntries.filter((entry) => entry.status === "open");
-  const taxableIncomeFromEntries = filteredEntries
+  const taxableIncomeFromEntries = operatingEntries(filteredEntries)
     .filter((entry) => entry.type === "income" && entry.vatRate > 0)
     .reduce((total, entry) => total + entry.amount, 0);
-  const exemptIncomeFromEntries = filteredEntries
+  const exemptIncomeFromEntries = operatingEntries(filteredEntries)
     .filter((entry) => entry.type === "income" && entry.vatRate === 0)
     .reduce((total, entry) => total + entry.amount, 0);
   const openSalaries = fiscalYearSalaries.filter((salary) => salary.status === "open");
@@ -2552,6 +2575,9 @@ export default function Home() {
   });
 
   const updateActive = (next: Administration) => {
+    for (const declaration of next.payrollDeclarations ?? []) {
+      next = { ...next, entries: syncDeclarationEntries(next, declaration, Boolean(declaration.processed)) };
+    }
     setAdministrations((items) =>
       items.map((admin) => {
         if (admin.id !== next.id) return admin;
@@ -2702,6 +2728,8 @@ export default function Home() {
   const addEntry = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (duplicateSalesInvoiceNumber) return;
+    if (entryForm.type === "expense" && entryForm.wkrType !== "none" && entryForm.wkrValue.trim() && parseOptionalAmountInput(entryForm.wkrValue) === undefined) return;
+    if (entryForm.type === "expense" && entryForm.paymentMethod === "dga" && !entryForm.rcDga.trim()) return;
     const amount = parseAmountInput(entryForm.amount);
     const validVatLines = getValidInvoiceVatLines({
       ...entryForm,
@@ -2740,6 +2768,9 @@ export default function Home() {
 
         return {
           id: uid(),
+          rcDga: entryForm.paymentMethod === "dga" ? entryForm.rcDga.trim() : undefined,
+          wkrType: entryForm.wkrType === "none" ? undefined : entryForm.wkrType as "free" | "exempt" | "nil",
+          // With split VAT lines the default fiscal value is the gross value per line.
           date: entryForm.date,
           invoiceNumber: entryForm.invoiceNumber.trim() || undefined,
           description: `${entryForm.description.trim()} · ${line.vatRate}% btw`,
@@ -2748,8 +2779,8 @@ export default function Home() {
           type: "expense",
           amount: line.parsedAmount,
           vatRate: line.parsedVatRate,
-          status: entryForm.status,
-          paidDate: entryForm.status === "paid" ? entryForm.paidDate || entryForm.date : undefined,
+          status: entryForm.paymentMethod === "dga" && entryForm.type === "expense" ? "paid" : entryForm.status,
+          paidDate: entryForm.status === "paid" || entryForm.paymentMethod === "dga" ? entryForm.paidDate || entryForm.date : undefined,
           depreciationYears: lineDepreciationYears,
         };
       });
@@ -2803,6 +2834,10 @@ export default function Home() {
 
     const entry: Entry = {
       id: editingEntryId ?? uid(),
+      rcDga: entryForm.type === "expense" && entryForm.paymentMethod === "dga" ? entryForm.rcDga.trim() : undefined,
+      wkrType: entryForm.type === "expense" && entryForm.wkrType !== "none" ? entryForm.wkrType as "free" | "exempt" | "nil" : undefined,
+      wkrValue: entryForm.type === "expense" && entryForm.wkrType !== "none" && entryForm.wkrValue.trim() ? parseOptionalAmountInput(entryForm.wkrValue) : undefined,
+      cashAmount: editingEntryId ? active.entries.find((item) => item.id === editingEntryId)?.cashAmount : undefined,
       date: entryForm.date,
       invoiceNumber: salesInvoiceNumber || undefined,
       description: entryForm.description.trim(),
@@ -2811,8 +2846,8 @@ export default function Home() {
       type: entryForm.type,
       amount,
       vatRate: Number(entryForm.vatRate),
-      status: entryForm.status,
-      paidDate: entryForm.status === "paid" ? entryForm.paidDate || entryForm.date : undefined,
+      status: entryForm.paymentMethod === "dga" && entryForm.type === "expense" ? "paid" : entryForm.status,
+      paidDate: entryForm.status === "paid" || entryForm.paymentMethod === "dga" ? entryForm.paidDate || entryForm.date : undefined,
       depreciationYears,
       financingPrincipal,
       financingInterest,
@@ -3398,6 +3433,7 @@ export default function Home() {
   };
 
   const removeEntry = (entryId: string) => {
+    if (active.entries.find((entry) => entry.id === entryId)?.payrollDeclarationId) { setTab("payrollTax"); return; }
     updateActive({
       ...active,
       entries: active.entries.filter((entry) => entry.id !== entryId),
@@ -3436,7 +3472,14 @@ export default function Home() {
   };
 
   const editEntry = (entry: Entry) => {
+    if (entry.payrollDeclarationId) { setTab("payrollTax"); return; }
+    if (entry.balanceOnly && entry.rcDga) { setTab("rc"); return; }
+    if (entry.salaryRecordId) { setTab("payroll"); return; }
     setEntryForm({
+      paymentMethod: entry.rcDga ? "dga" : "company",
+      rcDga: entry.rcDga ?? "",
+      wkrType: entry.wkrType ?? "none",
+      wkrValue: entry.wkrValue === undefined ? "" : formatDecimalInput(entry.wkrValue),
       date: entry.date,
       invoiceNumber: entry.invoiceNumber ?? "",
       description: entry.description,
@@ -3598,9 +3641,30 @@ export default function Home() {
 
   const downloadVatOverview = () => {
     downloadBlob(
-      `${periodFileBase}-btw-overzicht.pdf`,
-      buildVatOverviewPdf(active, vatOverview, periodLabel),
+      `${vatPdfMonth === "period" ? periodFileBase : `${safeFileName(active.name)}-${active.fiscalYear}-${vatPdfMonth}`}-btw-overzicht.pdf`,
+      buildVatOverviewPdf(active,
+        vatPdfMonth === "period" ? vatOverview : buildVatOverview(filterMonth(active.entries, `${active.fiscalYear}-${vatPdfMonth}`), vatDeductionPercent),
+        vatPdfMonth === "period" ? periodLabel : monthLabel(`${active.fiscalYear}-${vatPdfMonth}`)),
     );
+  };
+
+  const downloadFinancePdf = (title: string, label: string, sections: FinanceSection[]) => {
+    downloadBlob(`${administrationFileBase}-${safeFileName(title)}-${safeFileName(label)}.pdf`, buildTablePdf(active, title, label, sections));
+  };
+
+  const processPayrollDeclaration = (declaration: PayrollDeclaration) => {
+    const salaries = activeSalaries.filter((salary) => salary.period === declaration.period);
+    if (!salaries.length) return;
+    let entries = [...active.entries];
+    for (const salary of salaries) {
+      const existing = entries.find((entry) => entry.salaryRecordId === salary.id);
+      const entry = buildSalaryExpenseEntry(active, salary, existing?.id);
+      entries = [...entries.filter((item) => item.salaryRecordId !== salary.id), entry];
+    }
+    const processed = { ...declaration, processed: true };
+    updateActive({ ...active, entries,
+      payrollDeclarations: (active.payrollDeclarations ?? []).map((item) => item.id === processed.id ? processed : item),
+    });
   };
 
   const downloadPdfReport = () => {
@@ -3802,6 +3866,9 @@ export default function Home() {
               ["entries", "Boekingen"],
               ["invoices", "Facturen"],
               ["payroll", "Salarissen"],
+              ["payrollTax", "Loonheffingen"],
+              ["wkr", "WKR"],
+              ["rc", "Rekening-courant DGA"],
               ["checks", checkCount ? `Controle (${checkCount})` : "Controle"],
               ["reports", "Downloads"],
               ["contacts", "Relaties"],
@@ -4383,6 +4450,12 @@ export default function Home() {
                       </span>
                     </Field>
                   )}
+                  {entryForm.type === "expense" && <div className="grid gap-3 rounded-xl border border-[var(--line)] p-4 md:grid-cols-2">
+                    <Field label="Betaalwijze"><select className="input" value={entryForm.paymentMethod} onChange={(event) => setEntryForm({ ...entryForm, paymentMethod: event.target.value, status: event.target.value === "dga" ? "paid" : entryForm.status })}><option value="company">Zakelijke rekening / normale betaling</option><option value="dga">Rekening-courant DGA (zakelijk privé betaald)</option></select></Field>
+                    {entryForm.paymentMethod === "dga" && <Field label="Naam DGA"><input className="input" required list="booking-dga-names" value={entryForm.rcDga} onChange={(event) => setEntryForm({ ...entryForm, rcDga: event.target.value })} /><datalist id="booking-dga-names">{Array.from(new Set([...active.entries.map((entry) => entry.rcDga), ...activeSalaries.map((salary) => salary.employeeName)].filter(Boolean))).map((name) => <option key={name} value={name} />)}</datalist><span className="text-xs text-[var(--muted)]">Rekening-courant wordt gecrediteerd inclusief btw op de betaaldatum. Gebruik voor privé-uitgaven via de BV het tabblad Rekening-courant DGA.</span></Field>}
+                    <Field label="WKR-indeling"><select className="input" value={entryForm.wkrType} onChange={(event) => setEntryForm({ ...entryForm, wkrType: event.target.value })}><option value="none">Geen WKR</option><option value="free">Aangewezen als eindheffingsloon: vrije ruimte</option><option value="exempt">Gerichte vrijstelling</option><option value="nil">Nihilwaardering</option></select></Field>
+                    {entryForm.wkrType !== "none" && !entryUsesSplitVatLines && <Field label="Fiscale WKR-waarde (optioneel)"><input className="input" inputMode="decimal" value={entryForm.wkrValue} onChange={(event) => setEntryForm({ ...entryForm, wkrValue: event.target.value })} placeholder="Standaard: bedrag inclusief btw" /><span className="text-xs text-[var(--muted)]">Bij nihilwaardering telt € 0 mee. Vul alleen een afwijkende waarde in als de fiscale waarderingsregels dit vragen.</span></Field>}
+                  </div>}
                   <button className="primary-button mt-2 justify-center py-3 md:w-fit">
                     {editingEntryId ? "Wijziging opslaan" : "Boeking opslaan"}
                   </button>
@@ -4398,6 +4471,10 @@ export default function Home() {
               />
             </div>
           )}
+
+          {tab === "payrollTax" && <PayrollTaxPanel key={`${active.id}-${active.fiscalYear}`} admin={active} onChange={(next) => updateActive({ ...active, ...next })} onProcess={processPayrollDeclaration} onPdf={downloadFinancePdf} />}
+          {tab === "wkr" && <WkrPanel key={`${active.id}-${active.fiscalYear}`} admin={active} onChange={(next) => updateActive({ ...active, ...next })} onPdf={downloadFinancePdf} onEntries={() => { cancelEditEntry(); setEntryForm({ ...emptyEntry, type: "expense", category: "Personeelskosten WKR", wkrType: "free" }); setTab("entries"); }} />}
+          {tab === "rc" && <RcPanel key={`${active.id}-${active.fiscalYear}`} admin={active} onChange={(next) => updateActive({ ...active, ...next })} onPdf={downloadFinancePdf} onEntries={() => { cancelEditEntry(); setEntryForm({ ...emptyEntry, type: "expense", category: entryCategories.expense[0], paymentMethod: "dga" }); setTab("entries"); }} />}
 
           {tab === "invoices" && (
             <InvoiceImportPanel
@@ -4908,12 +4985,7 @@ export default function Home() {
                 button="Download PDF"
                 onClick={downloadProfitLoss}
               />
-              <DownloadCard
-                title="Btw-overzicht"
-                text="Grondslag, verschuldigde omzetbelasting, voorbelasting en saldo btw."
-                button="Download PDF"
-                onClick={downloadVatOverview}
-              />
+              <section className="panel grid gap-3"><h3 className="text-lg font-semibold">Btw-overzicht</h3><p className="text-sm text-[var(--muted)]">Kies de maand voor je PDF of gebruik de actieve jaar- of kwartaalperiode.</p><Field label="Periode btw-PDF"><select className="input" value={vatPdfMonth} onChange={(event) => setVatPdfMonth(event.target.value)}><option value="period">Actieve periode: {periodLabel}</option>{Array.from({ length: 12 }, (_, index) => String(index + 1).padStart(2, "0")).map((month) => <option key={month} value={month}>{monthLabel(`${active.fiscalYear}-${month}`)}</option>)}</select></Field><button className="secondary-button" onClick={downloadVatOverview}>Download btw PDF</button></section>
               <DownloadCard
                 title="PDF-rapport"
                 text="Download direct een PDF-rapport voor de gekozen periode."
@@ -5797,12 +5869,12 @@ function EntryTable({
                 <td className="py-3 pr-3">{money.format(entry.amount)}</td>
                 <td className="py-3 pr-3">{entry.vatRate}%</td>
                 <td className="py-3 pr-3">
-                  <span className="font-semibold">{entry.status === "paid" ? "Betaald" : "Open"}</span>
+                  <span className="font-semibold">{entry.payrollDeclarationId && !entry.balanceOnly ? "Via aangifte" : entry.rcKind === "opening" ? "Beginsaldo" : entry.status === "paid" ? "Betaald" : "Open"}</span>
                   {entry.status === "paid" && entry.paidDate ? (
                     <span className="block text-xs text-[var(--muted)]">op {entry.paidDate}</span>
                   ) : null}
                 </td>
-                <td className="py-3 pr-3">{entry.type === "income" ? "Inkomsten" : "Uitgaven"}</td>
+                <td className="py-3 pr-3">{entry.balanceOnly ? "Balans" : entry.type === "income" ? "Inkomsten" : "Uitgaven"}</td>
                 <td className="py-3 pr-3">{entry.category}</td>
                 <td className="py-3 pr-3">
                   <span className="text-xs font-semibold text-[var(--muted)]">

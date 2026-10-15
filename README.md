@@ -69,3 +69,48 @@ Daarna kan de build als Sites-versie worden opgeslagen en gedeployed. De huidige
 Codex/Sites-publicatie kon nog niet worden afgerond, omdat het gekoppelde
 project-owner account als gedeactiveerd wordt gemeld. Zodra dat account weer
 actief is, kan de eerste productieversie worden aangemaakt.
+
+## Loonheffingen, WKR en rekening-courant
+
+- **Loonheffingen:** leg de definitieve maandelijkse aangifte vast. Het voorstel
+  gebruikt de opgeslagen salarisregels. Leg loonbelasting/premie volksverzekeringen,
+  DGA-bijdrage Zvw, werkgevers-Zvw, werknemersverzekeringen, eindheffingen en
+  correcties afzonderlijk vast. `Verwerk salarissen en werkgeverslasten` boekt de
+  gekoppelde salariskosten en alleen de nog niet daarin opgenomen werkgeverslasten.
+  Herhaald verwerken vervangt gekoppelde boekingen. Betalingen, deelbetalingen en
+  negatieve teruggaven boeken op de balans, zonder extra kosten of btw. Correcties
+  van eerdere tijdvakken zijn een aangiftesaldo; de onderliggende oude salaris- of
+  kostenboeking moet afzonderlijk worden gecorrigeerd. Het aangifteoverzicht is
+  downloadbaar als PDF. Deze functie dient geen loonaangifte in; zij ondersteunt
+  maandtijdvakken passend bij de bestaande maandelijkse salarisadministratie.
+- **WKR:** stel per kalenderjaar de daadwerkelijke fiscale loonsom en tarieven in.
+  In 2025/2026 zijn de standaardtarieven 2% tot EUR 400.000 en 1,18% daarboven.
+  Wijs gewone kostenboekingen toe aan vrije ruimte, gerichte vrijstelling of
+  nihilwaardering. De standaardwaarde is inclusief btw; een afwijkende fiscale
+  waardering kan worden ingevoerd. Niet-aangewezen kosten tellen niet mee. De
+  eindheffing is 80% over de overschrijding en wordt niet automatisch als tweede
+  kostenpost geboekt. Neem de werkelijk aangegeven eindheffing over bij de
+  loonaangifte. Het overzicht geldt per administratie, zonder concernregeling.
+- **Rekening-courant DGA:** kies bij zakelijke kosten de betaalwijze
+  `Rekening-courant DGA` en vul de naam van de DGA in. De factuur blijft een
+  zakelijke kosten-/investeringsboeking met de gebruikelijke btw-beoordeling;
+  rekening-courant wordt gecrediteerd voor het totaal inclusief btw op de
+  betaaldatum. Registreer privé-uitgaven via de BV, onderlinge betalingen en een
+  bestaand beginsaldo op het tabblad Rekening-courant DGA. Dit zijn uitsluitend
+  balansmutaties. Positief saldo = schuld DGA aan BV, negatief = schuld BV aan DGA.
+  De maand-PDF bevat het beginsaldo uit alle eerdere mutaties, de maandmutaties
+  en het eindsaldo, afzonderlijk per DGA. Rente wordt niet automatisch berekend.
+- **Btw-PDF:** selecteer onder Downloads een afzonderlijke maand van het actieve
+  boekjaar of de bestaande jaar-/kwartaalperiode. Balansmutaties, salarisregels
+  en loonheffingen worden niet als btw-omzet of btw-inkoopgrondslag meegenomen.
+
+Salariskosten worden aan de salarismaand toegerekend. In het kasoverzicht telt
+het netto uitbetaalde loon mee, plus de afzonderlijke betalingen loonheffingen.
+Privé voorgeschoten zakelijke kosten leiden niet tot een bankuitgave van de BV.
+Controleer voor het afsluiten de aansluiting met de ingediende aangifte, de
+bankbetalingen en eventuele eerder handmatig geboekte kosten, zodat oude
+handmatige boekingen niet dubbel blijven staan.
+
+Bronnen: [Belastingdienst WKR](https://www.belastingdienst.nl/wps/wcm/connect/nl/personeel-en-loon/content/werkkostenregeling),
+[loonaangifte](https://www.belastingdienst.nl/wps/wcm/connect/nl/personeel-en-loon/content/loonaangifte-aangifte-loonheffingen),
+[rekening-courant](https://www.belastingdienst.nl/wps/wcm/connect/bldcontentnl/belastingdienst/prive/werk_en_inkomen/bijzondere_situaties/geld_lenen_van_uw_bv/voorwaarden_bij_de_rekening_courant).
