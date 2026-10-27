@@ -1,4 +1,7 @@
+import type { EmployeePayroll } from "./employee-payroll";
 export type AccountingEntryFields = {
+  payrollSettlement?: "pension" | "deduction";
+  payrollSettlementFund?: string;
   balanceOnly?: boolean;
   cashAmount?: number;
   rcDga?: string;
@@ -14,6 +17,7 @@ export type FinanceEntry = AccountingEntryFields & {
   status: "paid" | "open"; paidDate?: string; salaryRecordId?: string;
 };
 export type FinanceSalary = {
+  employeePayroll?: EmployeePayroll;
   id: string; period: string; grossSalary: number; wageTax: number; netSalary: number;
   employeeName: string; employerHealthContribution: number;
   zvwContributionType?: "dga_contribution" | "employer_levy";
@@ -57,12 +61,13 @@ export function salaryDeclarationProposal(salaries: FinanceSalary[], month: stri
   return {
     wageTax: cents(selected.reduce((total, salary) => total + salary.wageTax, 0)),
     dgaZvw: cents(selected.reduce((total, salary) => total + (salary.zvwContributionType !== "employer_levy" ? salary.employerHealthContribution : 0), 0)),
+    employeeInsurance: cents(selected.reduce((total, salary) => total + (salary.employeePayroll?.result.insurance ?? 0), 0)),
     employerZvw: cents(selected.reduce((total, salary) => total + (salary.zvwContributionType === "employer_levy" ? salary.employerHealthContribution : 0), 0)),
   };
 }
 export function payrollSupplement(declaration: PayrollDeclaration, salaries: FinanceSalary[]) {
   // Employer Zvw in the salary cost must not also be booked as declaration cost.
-  return cents(declaration.employeeInsurance + declaration.endLevy + declaration.employerZvw - salaryDeclarationProposal(salaries, declaration.period).employerZvw);
+  return cents(declaration.employeeInsurance - salaryDeclarationProposal(salaries, declaration.period).employeeInsurance + declaration.endLevy + declaration.employerZvw - salaryDeclarationProposal(salaries, declaration.period).employerZvw);
 }
 export function monthEnd(month: string) {
   const [year, number] = month.split("-").map(Number);
@@ -136,7 +141,7 @@ export function payrollSections(declaration: PayrollDeclaration, salaries: Finan
       ["Betaalkenmerk", declaration.reference || "-"], ["Ingediend op", declaration.filedDate || "Nog niet vastgelegd"],
     ] },
     { title: "Boekhoudkundige verwerking", headers: ["Onderdeel", "Verwerking"], widths: [240, 271], rows: [
-      ["Brutoloon en Zvw werkgever", "Via gekoppelde salarisregels"], ["Aanvullende werkgeverskosten", euro(costs)],
+      ["Loon, pensioen, Zvw en premies werkgever", "Via gekoppelde salarisregels"], ["Aanvullende werkgeverskosten", euro(costs)],
       ["Status kostenverwerking", declaration.processed ? "Verwerkt" : "Nog niet verwerkt"],
       ["Bruto salarissen tijdvak", euro(gross)], ["Netto salarissen tijdvak", euro(net)],
       ["Overige inhoudingen / aansluitverschil", euro(gross - net - proposal.wageTax - proposal.dgaZvw)],

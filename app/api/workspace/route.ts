@@ -1,3 +1,4 @@
+import type { EmployeeSalary, EmployeeDraft } from "../../lib/employee-payroll";
 import type { AccountingEntryFields, PayrollDeclaration, WkrSettings } from "../../lib/payroll-accounting";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -29,21 +30,7 @@ type Contact = {
   type: "customer" | "supplier" | "entrepreneur";
 };
 
-type SalaryRecord = {
-  id: string;
-  employeeId?: string;
-  employeeName: string;
-  employeeBirthDate?: string;
-  employeeAddress?: string;
-  period: string;
-  grossSalary: number;
-  wageTax: number;
-  netSalary: number;
-  employerHealthContribution: number;
-  zvwContributionType?: "dga_contribution" | "employer_levy";
-  status: "paid" | "open";
-  paymentDate: string;
-};
+type SalaryRecord = EmployeeSalary;
 
 type PayrollEmployee = {
   id: string;
@@ -88,6 +75,7 @@ type Administration = {
   entries: Entry[];
   contacts: Contact[];
   payrollEmployees?: PayrollEmployee[];
+  employeePayrollDrafts?: EmployeeDraft[];
   salaries?: SalaryRecord[];
   vatDeduction?: VatDeductionSettings;
 };
