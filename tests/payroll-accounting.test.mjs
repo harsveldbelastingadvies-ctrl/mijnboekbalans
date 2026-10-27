@@ -9,7 +9,7 @@ const wkr = { fiscalWage: 58000, lowerRate: 2, upperRate: 1.18, threshold: 40000
 
 test("non-insured DGA: remittance is liability settlement, with no duplicate costs or VAT", () => {
   const s = salary(); const d = declaration({ payments: [{ id: "p", date: "2026-11-20", amount: 1742.5, reference: "Betaald" }] });
-  assert.deepEqual(salaryDeclarationProposal([s], "2026-10"), { wageTax: 1500, dgaZvw: 242.5, employerZvw: 0 });
+  assert.deepEqual(salaryDeclarationProposal([s], "2026-10"), { wageTax: 1500, dgaZvw: 242.5, employerZvw: 0, employeeInsurance: 0 });
   assert.equal(payrollTotal(d), 1742.5); assert.equal(payrollOutstanding(d), 0); assert.equal(payrollSupplement(d, [s]), 0);
   const entries = syncDeclarationEntries(admin([entry({ amount: 5000, vatRate: 0, cashAmount: s.netSalary, salaryRecordId: "s" })], [s]), d, true);
   assert.equal(operatingEntries(entries).reduce((sum, row) => sum + row.amount, 0), 5000);

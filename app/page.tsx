@@ -12,6 +12,9 @@ import {
 
 import { getNextInvoiceNumber, hasDuplicateSalesInvoice, isValidInvoiceSequence } from "./lib/invoice-numbering";
 
+import { EmployeePayrollPanel } from "./components/employee-payroll-panel";
+import { markEmployeeSalaryPaid, employeeExpenseEntry, employeePayslipSections, type EmployeeSalary, type EmployeeDraft } from "./lib/employee-payroll";
+
 import { PayrollTaxPanel, RcPanel, WkrPanel } from "./components/finance-panels";
 import { companyCashAmount, operatingEntries, vatEntries, filterMonth, monthEnd, monthLabel, syncDeclarationEntries, type AccountingEntryFields, type PayrollDeclaration, type WkrSettings, type FinanceSection } from "./lib/payroll-accounting";
 
@@ -24,6 +27,7 @@ type TabKey =
   | "entries"
   | "invoices"
   | "payroll"
+  | "employeePayroll"
   | "payrollTax"
   | "wkr"
   | "rc"
@@ -66,21 +70,7 @@ type Contact = {
   type: "customer" | "supplier" | "entrepreneur";
 };
 
-type SalaryRecord = {
-  id: string;
-  employeeId?: string;
-  employeeName: string;
-  employeeBirthDate?: string;
-  employeeAddress?: string;
-  period: string;
-  grossSalary: number;
-  wageTax: number;
-  netSalary: number;
-  employerHealthContribution: number;
-  zvwContributionType?: ZvwContributionType;
-  status: EntryStatus;
-  paymentDate: string;
-};
+type SalaryRecord = EmployeeSalary;
 
 type PayrollEmployee = {
   id: string;
@@ -145,6 +135,7 @@ type Administration = {
   entries: Entry[];
   contacts: Contact[];
   payrollEmployees?: PayrollEmployee[];
+  employeePayrollDrafts?: EmployeeDraft[];
   salaries?: SalaryRecord[];
   vatDeduction?: VatDeductionSettings;
 };
@@ -1409,15 +1400,15 @@ function getSalaryEmployee(admin: Administration, salary: SalaryRecord) {
 }
 
 function getSalaryEmployeeName(admin: Administration, salary: SalaryRecord) {
-  return getSalaryEmployee(admin, salary)?.name || salary.employeeName;
+  return salary.employeePayroll?.input.name || getSalaryEmployee(admin, salary)?.name || salary.employeeName;
 }
 
 function getSalaryEmployeeBirthDate(admin: Administration, salary: SalaryRecord) {
-  return getSalaryEmployee(admin, salary)?.birthDate || salary.employeeBirthDate || "";
+  return salary.employeePayroll?.input.birthDate || getSalaryEmployee(admin, salary)?.birthDate || salary.employeeBirthDate || "";
 }
 
 function getSalaryEmployeeAddress(admin: Administration, salary: SalaryRecord) {
-  return getSalaryEmployee(admin, salary)?.address || salary.employeeAddress || "";
+  return salary.employeePayroll?.input.address || getSalaryEmployee(admin, salary)?.address || salary.employeeAddress || "";
 }
 
 function getSalaryYear(period: string) {
@@ -1436,6 +1427,7 @@ function filterSalariesByYear(salaries: SalaryRecord[], fiscalYear: number) {
 }
 
 function getSalaryZvwContribution(salary: SalaryRecord, fallbackFiscalYear: number) {
+  if (salary.employeePayroll) return salary.employeePayroll.result.zvw;
   return calculateZvwContribution(
     salary.grossSalary,
     getSalaryYear(salary.period) || fallbackFiscalYear,
@@ -1449,6 +1441,7 @@ function getSalaryZvwLabel(salary: SalaryRecord, fallbackFiscalYear: number) {
 }
 
 function getSalaryEmployerCost(salary: SalaryRecord, fallbackFiscalYear: number) {
+  if (salary.employeePayroll) return salary.employeePayroll.result.employerCost;
   const type = normalizeZvwContributionType(salary.zvwContributionType);
   const employerZvw =
     type === "employer_levy" ? getSalaryZvwContribution(salary, fallbackFiscalYear) : 0;
@@ -1460,6 +1453,7 @@ function buildSalaryExpenseEntry(
   salary: SalaryRecord,
   existingId?: string,
 ): Entry {
+  if (salary.employeePayroll) return employeeExpenseEntry(salary, existingId);
   const salaryYear = getSalaryYear(salary.period) || admin.fiscalYear;
   const employeeName = getSalaryEmployeeName(admin, salary);
   const type = normalizeZvwContributionType(salary.zvwContributionType);
@@ -1510,6 +1504,7 @@ function calculateMonthlyLaborTaxCredit(grossMonthlySalary: number, fiscalYear: 
 }
 
 function getSalaryLaborTaxCredit(salary: SalaryRecord, fallbackFiscalYear: number) {
+  if (salary.employeePayroll) return salary.employeePayroll.result.laborCredit;
   return calculateMonthlyLaborTaxCredit(
     salary.grossSalary,
     getSalaryYear(salary.period) || fallbackFiscalYear,
@@ -1537,6 +1532,7 @@ function calculateSalaryTotals(salaries: SalaryRecord[], fiscalYear: number) {
   return salaries.reduce(
     (acc, salary) => {
       acc.grossSalary += salary.grossSalary;
+      acc.fiscalWage += salary.employeePayroll?.result.fiscalWage ?? salary.grossSalary;
       acc.wageTax += salary.wageTax;
       acc.netSalary += salary.netSalary;
       acc.employerHealthContribution += getSalaryZvwContribution(salary, fiscalYear);
@@ -1546,6 +1542,7 @@ function calculateSalaryTotals(salaries: SalaryRecord[], fiscalYear: number) {
     },
     {
       grossSalary: 0,
+      fiscalWage: 0,
       wageTax: 0,
       netSalary: 0,
       employerHealthContribution: 0,
@@ -1851,6 +1848,7 @@ function buildTablePdf(
   periodLabel: string,
   sections: PdfTableSection[],
 ) {
+  const compactPayslip = /loonstrook/i.test(title);
   const encoder = new TextEncoder();
   const pages: string[] = [];
   let commands: string[] = [];
@@ -1859,10 +1857,18 @@ function buildTablePdf(
   const colors = pdfBrandColors;
 
   const rgb = (color: number[]) => color.join(" ");
-  const truncate = (value: string | number, width: number) => {
-    const safe = pdfSafe(value);
-    const max = Math.max(8, Math.floor(width / 5.2));
-    return safe.length > max ? `${safe.slice(0, max - 1)}...` : safe;
+  const wrap = (value: string | number, width: number) => {
+    const max = Math.max(8, Math.floor((width - 14) / 4.5));
+    const words = pdfSafe(value).split(/\s+/);
+    const lines: string[] = []; let line = "";
+    for (const word of words) {
+      if (line && (line + " " + word).length > max) { lines.push(line); line = ""; }
+      let rest = word;
+      while (rest.length > max) { if (line) { lines.push(line); line = ""; } lines.push(rest.slice(0,max)); rest = rest.slice(max); }
+      line = line ? line + " " + rest : rest;
+    }
+    if (line || !lines.length) lines.push(line);
+    return lines;
   };
   const rect = (x: number, bottom: number, width: number, height: number, fill: number[], stroke?: number[]) => {
     commands.push(`${rgb(fill)} rg ${x} ${bottom} ${width} ${height} re f`);
@@ -1893,6 +1899,7 @@ function buildTablePdf(
       text("BoekBalans", 62, 785, 11, colors.white, "F2");
       text(title, 62, 758, 22, colors.white, "F2");
       text(`${admin.name} · ${periodLabel} · boekjaar ${admin.fiscalYear}`, 62, 739, 11, colors.white);
+      if (/loonstrook/i.test(title)) { y = 702; return; }
       rect(42, 650, 511, 56, colors.tealSoft, colors.line);
       text(`Ondernemer: ${admin.owner || "-"}`, 58, 686, 9, colors.ink, "F2");
       text(`KvK: ${admin.kvk || "-"}    Btw-nummer: ${admin.vatNumber || "-"}`, 58, 670, 9, colors.ink);
@@ -1908,11 +1915,11 @@ function buildTablePdf(
     if (y - height < 58) newPage();
   };
   const addSectionTitle = (sectionTitle: string) => {
-    ensureSpace(42);
+    ensureSpace(100);
     text(sectionTitle, 42, y, 14, colors.ink, "F2");
-    y -= 18;
+    y -= compactPayslip ? 15 : 18;
     commands.push(`${rgb(colors.line)} RG 0.7 w 42 ${y} m 553 ${y} l S`);
-    y -= 16;
+    y -= compactPayslip ? 12 : 16;
   };
   const addHeader = (section: PdfTableSection) => {
     rect(42, y - 14, 511, 22, colors.tealSoft, colors.line);
@@ -1921,7 +1928,7 @@ function buildTablePdf(
       text(header, x, y - 6, 7.5, colors.teal, "F2");
       x += section.widths[index];
     });
-    y -= 28;
+    y -= compactPayslip ? 22 : 28;
   };
 
   newPage();
@@ -1935,16 +1942,18 @@ function buildTablePdf(
 
     addHeader(section);
     section.rows.forEach((row) => {
-      ensureSpace(24);
+      const cells = row.map((cell,index) => wrap(cell,section.widths[index]));
+      const rowHeight = Math.max(...cells.map(lines=>lines.length)) * 11 + (compactPayslip ? 6 : 9);
+      ensureSpace(rowHeight + 22);
       if (y > 750 || y < 74) addHeader(section);
       let x = 50;
-      row.forEach((cell, index) => {
+      cells.forEach((lines, index) => {
         const isAmount = index === row.length - 1;
-        text(truncate(cell, section.widths[index]), x, y, 8.2, isAmount ? colors.ink : colors.muted, isAmount ? "F2" : "F1");
+        lines.forEach((line,lineIndex)=>text(line,x,y-lineIndex*11,8.2,isAmount ? colors.ink : colors.muted,isAmount ? "F2" : "F1"));
         x += section.widths[index];
       });
-      commands.push(`${rgb(colors.line)} RG 0.45 w 42 ${y - 10} m 553 ${y - 10} l S`);
-      y -= 22;
+      commands.push(`${rgb(colors.line)} RG 0.45 w 42 ${y - rowHeight + 8} m 553 ${y - rowHeight + 8} l S`);
+      y -= rowHeight;
     });
     y -= 12;
   });
@@ -2178,6 +2187,7 @@ function buildContactsPdf(admin: Administration) {
 }
 
 function buildPayslipPdf(admin: Administration, salary: SalaryRecord, fiscalYearSalaries: SalaryRecord[]) {
+  if (salary.employeePayroll) return buildTablePdf(admin, "Loonstrook medewerker", salary.period, employeePayslipSections(salary, fiscalYearSalaries));
   const employeeName = getSalaryEmployeeName(admin, salary);
   const employeeBirthDate = getSalaryEmployeeBirthDate(admin, salary);
   const employeeAddress = getSalaryEmployeeAddress(admin, salary);
@@ -2270,7 +2280,7 @@ function buildAnnualIncomeStatementPdf(
       headers: ["Onderdeel", "Bedrag"],
       widths: [340, 171],
       rows: [
-        ["Fiscaal loon / brutoloon", money.format(totals.grossSalary)],
+        ["Fiscaal loon", money.format(totals.fiscalWage)],
         ["Ingehouden loonheffing", money.format(totals.wageTax)],
         ["Verrekende arbeidskorting", money.format(totals.laborTaxCredit)],
         ["Netto uitbetaald", money.format(totals.netSalary)],
@@ -3247,6 +3257,7 @@ export default function Home() {
       return;
     }
 
+    if (activeSalaries.some(s => s.employeeId === selectedEmployee?.id && s.period === salaryForm.period && s.employeePayroll)) { window.alert("Voor deze medewerker en periode bestaat al een loonstrook. Gebruik Loonstrook medewerker."); return; }
     const salary: SalaryRecord = {
       id: editingSalaryId ?? uid(),
       employeeId: selectedEmployee?.id || undefined,
@@ -3282,6 +3293,7 @@ export default function Home() {
   };
 
   const editSalary = (salary: SalaryRecord) => {
+    if (salary.employeePayroll) { setTab("employeePayroll"); return; }
     setSalaryForm({
       employeeId: salary.employeeId ?? "",
       employeeName: salary.employeeName,
@@ -3353,7 +3365,7 @@ export default function Home() {
     const salaries =
       previous && previous.name !== employee.name
         ? activeSalaries.map((salary) =>
-            salary.employeeId === previous.id
+            salary.employeeId === previous.id && !salary.employeePayroll
               ? { ...salary, employeeName: employee.name }
               : salary,
           )
@@ -3397,6 +3409,7 @@ export default function Home() {
   };
 
   const removeSalary = (salaryId: string) => {
+    if (activeSalaries.find(s => s.id === salaryId)?.employeePayroll) { setTab("employeePayroll"); return; }
     updateActive({
       ...active,
       salaries: activeSalaries.filter((salary) => salary.id !== salaryId),
@@ -3433,6 +3446,8 @@ export default function Home() {
   };
 
   const removeEntry = (entryId: string) => {
+    const linkedSalary = activeSalaries.find(s => s.id === active.entries.find(e => e.id === entryId)?.salaryRecordId);
+    if (linkedSalary) { setTab(linkedSalary.employeePayroll ? "employeePayroll" : "payroll"); return; }
     if (active.entries.find((entry) => entry.id === entryId)?.payrollDeclarationId) { setTab("payrollTax"); return; }
     updateActive({
       ...active,
@@ -3474,7 +3489,7 @@ export default function Home() {
   const editEntry = (entry: Entry) => {
     if (entry.payrollDeclarationId) { setTab("payrollTax"); return; }
     if (entry.balanceOnly && entry.rcDga) { setTab("rc"); return; }
-    if (entry.salaryRecordId) { setTab("payroll"); return; }
+    if (entry.salaryRecordId) { setTab(activeSalaries.find(s => s.id === entry.salaryRecordId)?.employeePayroll ? "employeePayroll" : "payroll"); return; }
     setEntryForm({
       paymentMethod: entry.rcDga ? "dga" : "company",
       rcDga: entry.rcDga ?? "",
@@ -3532,6 +3547,12 @@ export default function Home() {
   };
 
   const markEntryPaid = (entryId: string) => {
+    const linkedSalary = activeSalaries.find(s => s.id === active.entries.find(e => e.id === entryId)?.salaryRecordId);
+    if (linkedSalary?.employeePayroll) {
+      const paid = markEmployeeSalaryPaid(linkedSalary,today);
+      updateActive({...active,salaries:activeSalaries.map(s=>s.id===paid.id?paid:s),entries:active.entries.map(e=>e.id===entryId?employeeExpenseEntry(paid,e.id):e)});
+      return;
+    }
     updateActive({
       ...active,
       entries: active.entries.map((entry) =>
@@ -3866,6 +3887,7 @@ export default function Home() {
               ["entries", "Boekingen"],
               ["invoices", "Facturen"],
               ["payroll", "Salarissen"],
+              ["employeePayroll", "Loonstrook medewerker"],
               ["payrollTax", "Loonheffingen"],
               ["wkr", "WKR"],
               ["rc", "Rekening-courant DGA"],
@@ -4472,6 +4494,8 @@ export default function Home() {
             </div>
           )}
 
+          {tab === "employeePayroll" && <EmployeePayrollPanel key={`${active.id}-${active.fiscalYear}`} admin={active} onChange={(next) => updateActive({ ...active, ...next })} onPdf={downloadFinancePdf} />}
+
           {tab === "payrollTax" && <PayrollTaxPanel key={`${active.id}-${active.fiscalYear}`} admin={active} onChange={(next) => updateActive({ ...active, ...next })} onProcess={processPayrollDeclaration} onPdf={downloadFinancePdf} />}
           {tab === "wkr" && <WkrPanel key={`${active.id}-${active.fiscalYear}`} admin={active} onChange={(next) => updateActive({ ...active, ...next })} onPdf={downloadFinancePdf} onEntries={() => { cancelEditEntry(); setEntryForm({ ...emptyEntry, type: "expense", category: "Personeelskosten WKR", wkrType: "free" }); setTab("entries"); }} />}
           {tab === "rc" && <RcPanel key={`${active.id}-${active.fiscalYear}`} admin={active} onChange={(next) => updateActive({ ...active, ...next })} onPdf={downloadFinancePdf} onEntries={() => { cancelEditEntry(); setEntryForm({ ...emptyEntry, type: "expense", category: entryCategories.expense[0], paymentMethod: "dga" }); setTab("entries"); }} />}
@@ -4509,7 +4533,7 @@ export default function Home() {
                 <div className="section-title">
                   <div>
                     <p className="eyebrow">Eenmalig vastleggen</p>
-                    <h3>DGA-gegevens</h3>
+                    <h3>Persoonsgegevens DGA / medewerker</h3>
                   </div>
                   {editingPayrollEmployeeId ? (
                     <button className="ghost-button" onClick={cancelEditPayrollEmployee} type="button">
@@ -4583,7 +4607,7 @@ export default function Home() {
                       Vul adres automatisch
                     </button>
                     <button className="primary-button justify-center py-3 md:w-fit">
-                      {editingPayrollEmployeeId ? "DGA-gegevens opslaan" : "DGA toevoegen"}
+                      {editingPayrollEmployeeId ? "Persoonsgegevens opslaan" : "Persoon toevoegen"}
                     </button>
                     <span className="text-xs font-medium text-[var(--muted)]">
                       {addressLookupStatus || "Vul postcode en huisnummer in om het adres op te halen."}
@@ -4605,7 +4629,7 @@ export default function Home() {
                   ))}
                   {!activePayrollEmployees.length ? (
                     <p className="rounded-lg bg-white p-4 text-sm text-[var(--muted)]">
-                      Leg eerst de DGA vast. Daarna kun je bij elke salarisregel alleen de DGA kiezen.
+                      Leg de DGA of medewerker vast. Maak medewerkerloonstroken vervolgens bij Loonstrook medewerker.
                     </p>
                   ) : null}
                 </div>
@@ -4753,7 +4777,7 @@ export default function Home() {
                       </tr>
                     </thead>
                     <tbody>
-                      {fiscalYearSalaries.map((salary) => {
+                      {fiscalYearSalaries.filter(s => !s.employeePayroll).map((salary) => {
                         const salaryIsBooked = active.entries.some(
                           (entry) => entry.salaryRecordId === salary.id,
                         );

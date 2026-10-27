@@ -114,3 +114,63 @@ handmatige boekingen niet dubbel blijven staan.
 Bronnen: [Belastingdienst WKR](https://www.belastingdienst.nl/wps/wcm/connect/nl/personeel-en-loon/content/werkkostenregeling),
 [loonaangifte](https://www.belastingdienst.nl/wps/wcm/connect/nl/personeel-en-loon/content/loonaangifte-aangifte-loonheffingen),
 [rekening-courant](https://www.belastingdienst.nl/wps/wcm/connect/bldcontentnl/belastingdienst/prive/werk_en_inkomen/bijzondere_situaties/geld_lenen_van_uw_bv/voorwaarden_bij_de_rekening_courant).
+
+## Medewerkerloonstroken
+
+Voeg een medewerker toe bij **Salarissen → Persoonsgegevens DGA / medewerker**.
+Open **Loonstrook medewerker**, selecteer de persoon en vul de werkgevers- en
+contractgegevens, verloonde uren en loonbestanddelen in. De loonstrook legt een
+snapshot vast, zodat een latere wijziging van persoons- of werkgeversgegevens
+geen bestaande medewerkerloonstrook verandert.
+
+- **Concept bewaren** slaat uitsluitend een concept op, zonder kosten,
+  aangiftebedragen of cumulatieven. Een concept-PDF bevat het label CONCEPT.
+- **Definitief maken en boeken** valideert de verplichte gegevens, maakt een
+  bruto-nettoberekening en vervangt de gekoppelde kostenboeking bij een correctie.
+  Loonstrook en gebalanceerd loonjournaal zijn als PDF beschikbaar. Lange teksten
+  lopen door op volgende regels en worden niet meer afgekapt.
+- Automatische loonheffing gebruikt de officiële **witte maandtabel Nederland
+  standaard 2026, vóór AOW**; het naastlagere tabelloon en de gepubliceerde
+  berekening boven EUR 11.092,50 worden toegepast. Arbeidskorting zit al in de
+  loonheffing. Voor bijzondere beloningen moet het juiste bijzondere tarief,
+  inclusief eventuele verrekening van heffingskortingen, worden onderbouwd.
+- Het werknemerspensioen verlaagt in de ondersteunde uniforme loonberekening het
+  fiscale loon, SV-loon en Zvw-loon. Het werkgeverspensioen is een extra kostenpost.
+  Neem exacte maandbedragen of een geverifieerde periodieke pensioengrondslag na
+  franchise en deeltijd met afzonderlijke werknemers-/werkgeverspercentages over.
+  De regeling wordt niet geraden. Documenteer ook wanneer geen regeling geldt.
+- Automatische Zvw en werknemersverzekeringen gebruiken VCR voor volledige,
+  aaneensluitende maandtijdvakken in 2026 vóór AOW. Zvw werkgever is 6,10%, AWf
+  2,74%/7,74%, Aof 6,27%/7,63%, Wko 0,50%. Whk komt uit de werkgeversbeschikking.
+  De maandgrens is EUR 6.617,41. Bij overstap midden in het kalenderjaar zijn de
+  eerdere premietijdvakken, het cumulatieve SV-loon en het cumulatieve premie-/
+  bijdrageloon vereist. Beginstanden blijven binnen het jaar gelijk. Eerdere
+  handmatige premies kunnen niet zonder herbeoordeling automatisch worden vervolgd.
+- Vakantiegeld kan worden gereserveerd of maandelijks uitbetaald. De standaardbasis
+  is het basisloon plus regulier extra loon/overwerk. Controleer volgens de cao of
+  overige beloningen moeten meetellen; stel zo nodig een onderbouwde afwijkende
+  vakantiegeldgrondslag in. De fiscale indeling van bijzonder loon blijft behouden. Uitbetaling uit de reserve wordt niet opnieuw als loonkosten geboekt en kan
+  alleen binnen de beschikbare reserve; vul bij overstap de beginreserve in.
+- Pensioenbetalingen (werknemer én werkgever) en afdracht van overige netto
+  inhoudingen zijn afzonderlijke balansbetalingen, zonder btw of dubbele kosten.
+  De saldi omvatten alle opgeslagen perioden. De werkelijke nettoloonbetaling leg
+  je op de loonstrook vast. De aangifte loonheffingen neemt werkgeverspremies en
+  Zvw over zonder deze nogmaals als werkgeverskosten te boeken. Controleer de
+  verschillen met de daadwerkelijk ingediende aangifte.
+
+De automatische route is beperkt tot standaardwerknemers met uniforme fiscale,
+SV- en Zvw-grondslagen en volledige maandtijdvakken in 2026. Gebruik gecontroleerde
+exacte loonheffing en premiebedragen voor andere jaren, gedeeltelijke tijdvakken,
+AOW, buitenland, vrijstellingen of AWf-uitzonderingen. Complexe afwijkende
+loonbegrippen (zoals bepaalde PAWW-inhoudingen), loon in natura, meerdere
+inkomstenverhoudingen en niet-maandelijkse loonperioden vereisen een volledige
+berekening in passende salarissoftware. Deze uitbreiding dient geen loon- of
+pensioenaangifte in en vervangt geen controle van cao/pensioenplicht of aangifte.
+Correcties moeten chronologisch worden verwerkt: corrigeer of verwijder eerst de
+latere stroken om daarna alle afhankelijke perioden opnieuw te berekenen.
+
+Bronnen: [loonstrookvereisten RVO](https://ondernemersplein.overheid.nl/wetten-en-regels/loonstrook-aan-uw-werknemer-geven/),
+[witte maandtabel 2026](https://download.belastingdienst.nl/belastingdienst/dl/rekenhulpen/loonheffing/2026/v01/pdf/wit_mnd_nl_std_20260101.pdf),
+[Handboek Loonheffingen](https://www.belastingdienst.nl/wps/wcm/connect/bldcontentnl/themaoverstijgend/brochures_en_publicaties/handboek-loonheffingen),
+[minimumuurloon 2026](https://www.rijksoverheid.nl/themas/werk/minimumloon/bedragen-minimumloon/bedragen-minimumloon-2026),
+[premies 2026](https://www.belastingdienst.nl/wps/wcm/connect/bldcontenten/belastingdienst/business/payroll_taxes/you_are_not_established_in_the_netherlands_are_you_required_to_withhold_payroll_taxes/when_you_are_going_to_withhold_payroll_taxes/calculating_payroll_taxes/rates/rates-2026/table-9-employed-persons-insurance-scheme-contributrions-2026).
