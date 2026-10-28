@@ -248,6 +248,7 @@ const entryCategories: Record<EntryType, string[]> = {
     "Software",
     "Kantoorkosten",
     "Auto- en transportkosten",
+    "Brandstofkosten machines en materieel",
     "Huisvestingskosten",
     "Reiskosten",
     "Marketing",
