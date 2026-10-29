@@ -48,8 +48,20 @@ export function buildModernPayslipPdf(admin: Employer, title: string, period: st
     } else { text("Vervolg / specificatie", 42, y, 9, teal, true); y -= 25; }
   };
   const heading = (label: string) => { text(label, 42, y, 12, teal, true); y -= 12; line(y); y -= 19; };
+  // Employee snapshots combine holiday reserves and cumulatives in one section.
+  // Move only the cumulative rows; retain holiday information in the main body.
+  const cumulativeRows: Array<Array<string | number>> = [];
+  const bodySections = sections.map(section => {
+    if (!/cumulatie/i.test(section.title)) return section;
+    const combined = /vakantiegeld/i.test(section.title);
+    const rows = section.rows.filter(row => {
+      if (!combined || /cumulatie/i.test(String(row[0]))) { cumulativeRows.push(row); return false; }
+      return true;
+    });
+    return {...section, title: combined ? "Vakantiegeld" : section.title, rows};
+  });
   newPage();
-  sections.forEach(section => {
+  bodySections.forEach(section => {
     if (!section.rows.length) return;
     const calculation = /berekening|bruto naar netto/i.test(section.title);
     const groups: Array<Array<Array<string | number>>> = calculation ? section.rows.map(row => [row]) : Array.from({length: Math.ceil(section.rows.length / 2)}, (_, i) => section.rows.slice(i * 2, i * 2 + 2));
@@ -79,6 +91,34 @@ export function buildModernPayslipPdf(admin: Employer, title: string, period: st
     });
     y -= 10;
   });
+  if (cumulativeRows.length) {
+    const groups = Array.from({length: Math.ceil(cumulativeRows.length / 3)}, (_, i) => cumulativeRows.slice(i*3, i*3+3));
+    const heights = groups.map(group => Math.max(...group.map(row => wrap(row[0], 148, 7.5).length*10 + wrap(row[1],148).length*12)) + 12);
+    let start = 0;
+    while (start < groups.length) {
+      const remainingHeight = heights.slice(start).reduce((a,b) => a+b,0) + 42;
+      if (y - remainingHeight < 65) newPage();
+      // Keep the usual block intact. Extremely long migrated details can continue.
+      let end = start; let height = 42;
+      while (end < groups.length && height + heights[end] <= y - 65) { height += heights[end]; end++; }
+      if (end === start) throw new Error("De cumulatieve toelichting is te lang voor een PDF-pagina. Verkort de toelichting.");
+      const top = 65 + height;
+      rect(42, 65, 511, height, "0.94 0.97 0.96");
+      text(start ? "Cumulatieven (vervolg)" : "Cumulatieven t/m deze periode", 54, top-21, 11, teal, true);
+      let at = top-42;
+      for (let i = start; i < end; i++) {
+        groups[i].forEach((row,j) => {
+          const x = 54+j*167;
+          const labels = wrap(row[0],148,7.5);
+          labels.forEach((v,k) => text(v,x,at-k*10,7.5,muted));
+          wrap(row[1],148).forEach((v,k) => text(v,x,at-labels.length*10-3-k*12,9,ink,true));
+        });
+        at -= heights[i];
+      }
+      start = end;
+      if (start < groups.length) newPage();
+    }
+  }
   finish();
   const encoder = new TextEncoder();
   const objects = ["", "", "", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>"];
