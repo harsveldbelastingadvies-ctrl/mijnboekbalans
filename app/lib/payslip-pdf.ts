@@ -4,8 +4,10 @@ type Employer = { name: string; fiscalYear: number };
 // Presentation only: render the supplied payroll snapshot without recalculation.
 export function buildModernPayslipPdf(admin: Employer, title: string, period: string, sections: Section[]) {
   const ink = "0.08 0.16 0.20", muted = "0.31 0.39 0.42", teal = "0.03 0.36 0.34";
-  const safe = (v: string | number) => String(v).replaceAll("€", "EUR").replaceAll("\u00a0", " ").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\x20-\x7e]/g, " ");
-  const escape = (v: string | number) => safe(v).replace(/[\\()]/g, "\\$&");
+  const safe = (v: string | number) => String(v).replace(/\bEUR(?=\s*[-+]?\d)/g, "€").replaceAll("\u00a0", " ").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\x20-\x7e€]/g, " ");
+  // WinAnsi maps the euro glyph to byte 0x80. An octal PDF escape keeps streams
+  // ASCII-safe, so UTF-8 Blob encoding does not alter glyph bytes or offsets.
+  const escape = (v: string | number) => safe(v).replace(/[\\()]/g, "\\$&").replaceAll("€", "\\200");
   const pages: string[] = []; let commands: string[] = []; let y = 0; let page = 0;
   const text = (v: string | number, x: number, at: number, size = 9, color = ink, bold = false) => commands.push(`${color} rg BT /${bold ? "F2" : "F1"} ${size} Tf ${x} ${at} Td (${escape(v)}) Tj ET`);
   const rect = (x: number, at: number, w: number, h: number, color: string) => commands.push(`${color} rg ${x} ${at} ${w} ${h} re f`);
@@ -95,7 +97,7 @@ export function buildModernPayslipPdf(admin: Employer, title: string, period: st
     const data = bodyOther.map(s=>({title:s.title,...grid(s.rows,3,511)}));
     const holidayGrid = grid(holiday?.rows ?? [],2,293);
     const cumulativeGrid = grid(cumulativeRows,4,487);
-    const amountWidth = (v:string,size:number) => [...v].reduce((n,c)=>n+("0123456789".includes(c)?556:c===" "||c==="."||c===","?278:c==="-"?333:c==="E"?667:c==="U"||c==="R"?722:600),0)*size/1000;
+    const amountWidth = (v:string,size:number) => [...v].reduce((n,c)=>n+("0123456789€".includes(c)?556:c===" "||c==="."||c===","?278:c==="-"?333:c==="E"?667:c==="U"||c==="R"?722:600),0)*size/1000;
     const calcRows = calculation.rows.map(row=>({label:wrap(row[0],198,8.5),value:wrap(row[1],79,8.5),strong:/totaal bruto|netto uit te betalen/i.test(String(row[0]))}));
     const calcHeights = calcRows.map(row=>Math.max(row.label.length,row.value.length)*11+5);
     const detailRows = (details?.rows ?? []).map(row=>{
@@ -176,7 +178,7 @@ export function buildModernPayslipPdf(admin: Employer, title: string, period: st
           if (strong) rect(42, y - heights[i] + 7, 511, heights[i], "0.94 0.97 0.96");
           wrap(row[0], 335).forEach((v,j) => text(v, 50, y - j*12, 9, ink, strong));
           wrap(row[1], 145).forEach((v,j) => {
-            const width = [...v].reduce((n,c) => n + ("0123456789".includes(c) ? 556 : c === " " || c === "." || c === "," ? 278 : c === "-" ? 333 : c === "E" ? 667 : c === "U" || c === "R" ? 722 : 600), 0) * 9/1000;
+            const width = [...v].reduce((n,c) => n + ("0123456789€".includes(c) ? 556 : c === " " || c === "." || c === "," ? 278 : c === "-" ? 333 : c === "E" ? 667 : c === "U" || c === "R" ? 722 : 600), 0) * 9/1000;
             text(v, 543-width, y-j*12, 9, ink, true);
           });
         } else group.forEach((row,j) => {
@@ -219,7 +221,7 @@ export function buildModernPayslipPdf(admin: Employer, title: string, period: st
   }
   finish();
   const encoder = new TextEncoder();
-  const objects = ["", "", "", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>"];
+  const objects = ["", "", "", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>"];
   const ids: number[] = [];
   pages.forEach(stream => {
     const content = objects.length; objects.push(`<< /Length ${encoder.encode(stream).length} >>\nstream\n${stream}\nendstream`);
