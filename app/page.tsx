@@ -10,6 +10,8 @@ import {
   useState,
 } from "react";
 
+import { buildModernPayslipPdf } from "./lib/payslip-pdf";
+
 import { getNextInvoiceNumber, hasDuplicateSalesInvoice, isValidInvoiceSequence } from "./lib/invoice-numbering";
 
 import { EmployeePayrollPanel } from "./components/employee-payroll-panel";
@@ -1849,7 +1851,8 @@ function buildTablePdf(
   periodLabel: string,
   sections: PdfTableSection[],
 ) {
-  const compactPayslip = /loonstrook/i.test(title);
+  if (/loonstrook/i.test(title)) return buildModernPayslipPdf(admin, title, periodLabel, sections);
+  const compactPayslip = false;
   const encoder = new TextEncoder();
   const pages: string[] = [];
   let commands: string[] = [];
@@ -6257,3 +6260,4 @@ function InvoiceImportPanel({
     </div>
   );
 }
+
