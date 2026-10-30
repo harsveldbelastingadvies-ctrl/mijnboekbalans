@@ -18,7 +18,10 @@ import { EmployeePayrollPanel } from "./components/employee-payroll-panel";
 import { markEmployeeSalaryPaid, employeeExpenseEntry, employeePayslipSections, type EmployeeSalary, type EmployeeDraft } from "./lib/employee-payroll";
 
 import { PayrollTaxPanel, RcPanel, WkrPanel } from "./components/finance-panels";
-import { companyCashAmount, operatingEntries, vatEntries, filterMonth, monthEnd, monthLabel, syncDeclarationEntries, type AccountingEntryFields, type PayrollDeclaration, type WkrSettings, type FinanceSection } from "./lib/payroll-accounting";
+import { companyCashAmount, operatingEntries, vatEntries, monthEnd, monthLabel, syncDeclarationEntries, type AccountingEntryFields, type PayrollDeclaration, type WkrSettings, type FinanceSection } from "./lib/payroll-accounting";
+
+import { VatPeriodField } from "./components/vat-period-field";
+import { filterVatPeriod, filterVatMonth, getVatDate, isDeferredVat, resolveVatDate, vatDateError, deferredVatError } from "./lib/vat-period";
 
 type EntryType = "income" | "expense";
 type EntryStatus = "paid" | "open";
@@ -43,6 +46,7 @@ type WorkspaceState = "checking" | "setup" | "locked" | "unlocked";
 type Entry = AccountingEntryFields & {
   id: string;
   date: string;
+  vatDate?: string;
   invoiceNumber?: string;
   description: string;
   relation: string;
@@ -99,6 +103,7 @@ type InvoiceVatLine = {
 };
 
 type InvoiceDraft = {
+  vatDate?: string;
   id: string;
   fileName: string;
   fileType: string;
@@ -360,6 +365,7 @@ const starterData: Administration[] = [
 ];
 
 const emptyEntry = {
+  vatDate: "",
   date: today,
   invoiceNumber: "",
   description: "",
@@ -669,6 +675,7 @@ function formatSignedEntryAmount(entry: Entry) {
 
 function formatEntryProcessing(entry: Entry) {
   const parts: string[] = [];
+  if (getVatDate(entry) !== entry.date) parts.push(`Btw-datum ${getVatDate(entry)}`);
   if (entry.balanceOnly) parts.push("Balanspost; geen omzet, kosten of btw");
   if (entry.rcDga) parts.push(`Rekening-courant ${entry.rcDga}`);
   if (entry.wkrType) parts.push(entry.wkrType === "free" ? "WKR vrije ruimte" : entry.wkrType === "exempt" ? "WKR gericht vrijgesteld" : "WKR nihilwaardering");
@@ -1085,8 +1092,14 @@ function calculateVatDeductionPercent(settings: VatDeductionSettings) {
   return clampPercent((taxable / total) * 100);
 }
 
-function calculateTotals(entries: Entry[], vatDeductionPercent = 100) {
+function calculateTotals(entries: Entry[], vatDeductionPercent = 100, vatPeriodEntries: Entry[] = entries) {
   const inputVatDeductionFactor = clampPercent(vatDeductionPercent) / 100;
+  const vatSummary = vatEntries(vatPeriodEntries).reduce((acc, entry) => {
+    const vat = getEntryVatAmount(entry);
+    if (entry.type === "income") acc.vatToPay += vat;
+    else { acc.inputVatTotal += vat; acc.vatToClaim += vat * inputVatDeductionFactor; }
+    return acc;
+  }, { vatToPay: 0, inputVatTotal: 0, vatToClaim: 0 });
   return operatingEntries(entries).reduce(
     (acc, entry) => {
       if (entry.balanceOnly) return acc;
@@ -1104,13 +1117,10 @@ function calculateTotals(entries: Entry[], vatDeductionPercent = 100) {
 
       if (entry.type === "income") {
         acc.revenue += entry.amount;
-        acc.vatToPay += vat;
         acc.incomeCount += 1;
       } else {
         acc.costs += profitLossAmount + nonDeductibleVat;
         acc.expenseAmountExVat += entry.amount;
-        acc.inputVatTotal += vat;
-        acc.vatToClaim += deductibleInputVat;
         acc.nonDeductibleVat += nonDeductibleVat;
         acc.nonDeductibleCosts += entry.nonDeductibleAmount ?? 0;
         acc.expenseCount += 1;
@@ -1133,9 +1143,7 @@ function calculateTotals(entries: Entry[], vatDeductionPercent = 100) {
       revenue: 0,
       costs: 0,
       expenseAmountExVat: 0,
-      vatToPay: 0,
-      vatToClaim: 0,
-      inputVatTotal: 0,
+      ...vatSummary,
       nonDeductibleVat: 0,
       nonDeductibleCosts: 0,
       open: 0,
@@ -1180,7 +1188,7 @@ function getQuarterSummaries(entries: Entry[], fiscalYear: number, vatDeductionP
     return {
       quarter,
       entries: periodEntries,
-      summary: calculateTotals(periodEntries, vatDeductionPercent),
+      summary: calculateTotals(periodEntries, vatDeductionPercent, filterVatPeriod(entries, fiscalYear, period)),
     };
   });
 }
@@ -1296,6 +1304,7 @@ function buildVatOverview(entries: Entry[], vatDeductionPercent = 100) {
     nonDeductibleInputVatTotal,
     vatBalance,
     vatDeductionPercent: clampPercent(vatDeductionPercent),
+    deferredEntries: vatEntries(entries).filter(isDeferredVat),
   };
 }
 
@@ -1372,7 +1381,7 @@ function buildMonthlyFinancialOverview(entries: Entry[], fiscalYear: number, vat
     const monthEntries = entries.filter(
       (entry) => Number(entry.date.slice(0, 4)) === fiscalYear && getMonthKeyFromDate(entry.date) === month.monthKey,
     );
-    const summary = calculateTotals(monthEntries, vatDeductionPercent);
+    const summary = calculateTotals(monthEntries, vatDeductionPercent, filterVatMonth(entries, month.monthKey));
     const vatBalance = summary.vatToPay - summary.vatToClaim;
     return {
       ...month,
@@ -2132,6 +2141,13 @@ function buildVatOverviewPdf(admin: Administration, overview: VatOverview, perio
       emptyText: "Nog geen kosten met voorbelasting in deze periode.",
     },
     {
+      title: "Inkoopfacturen uit eerdere kwartalen",
+      headers: ["Factuur", "Factuurdatum", "Btw-datum", "Voorbelasting"],
+      widths: [181, 100, 100, 130],
+      rows: overview.deferredEntries.map((entry) => [entry.invoiceNumber || entry.description, entry.date, getVatDate(entry), money.format(getEntryVatAmount(entry) * overview.vatDeductionPercent / 100)]),
+      emptyText: "Geen doorgeschoven inkoopfacturen in dit tijdvak.",
+    },
+    {
       title: "Saldo btw",
       headers: ["Onderdeel", "Bedrag"],
       widths: [340, 171],
@@ -2333,6 +2349,7 @@ export default function Home() {
   const [addressLookupStatus, setAddressLookupStatus] = useState("");
   const [kvkQuery, setKvkQuery] = useState("");
   const [kvkStatus, setKvkStatus] = useState("");
+  const [entryVatError, setEntryVatError] = useState("");
   const [period, setPeriod] = useState<PeriodKey>("year");
   const [vatPdfMonth, setVatPdfMonth] = useState("period");
   const [workspaceState, setWorkspaceState] = useState<WorkspaceState>("checking");
@@ -2484,16 +2501,16 @@ export default function Home() {
   );
   const periodLabel = getPeriodLabel(period);
   const summary = useMemo(
-    () => calculateTotals(filteredEntries, vatDeductionPercent),
-    [filteredEntries, vatDeductionPercent],
+    () => calculateTotals(filteredEntries, vatDeductionPercent, filterVatPeriod(active.entries, active.fiscalYear, period)),
+    [filteredEntries, vatDeductionPercent, active.entries, active.fiscalYear, period],
   );
   const profitLossStatement = useMemo(
     () => buildProfitLossStatement(filteredEntries, vatDeductionPercent),
     [filteredEntries, vatDeductionPercent],
   );
   const vatOverview = useMemo(
-    () => buildVatOverview(filteredEntries, vatDeductionPercent),
-    [filteredEntries, vatDeductionPercent],
+    () => buildVatOverview(filterVatPeriod(active.entries, active.fiscalYear, period), vatDeductionPercent),
+    [active.entries, active.fiscalYear, period, vatDeductionPercent],
   );
   const monthlySpendableOverview = useMemo(
     () => buildMonthlySpendableOverview(active.entries, active.fiscalYear, vatDeductionPercent),
@@ -2582,6 +2599,7 @@ export default function Home() {
   const bookableInvoiceDrafts = selectedInvoiceDrafts.filter((draft) => {
     const amount = parseAmountInput(draft.amount);
     const validVatLines = getValidInvoiceVatLines(draft);
+    if (vatDateError(draft.type, draft.date, resolveVatDate(draft.type, draft.date, draft.vatDate, active.fiscalYear, period))) return false;
     if (draft.vatLines.length > 1) {
       return draft.description.trim() && validVatLines.length === draft.vatLines.length;
     }
@@ -2742,6 +2760,10 @@ export default function Home() {
   const addEntry = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (duplicateSalesInvoiceNumber) return;
+    setEntryVatError("");
+    const vatDate = resolveVatDate(entryForm.type, entryForm.date, entryForm.vatDate, active.fiscalYear, period);
+    const dateError = vatDateError(entryForm.type, entryForm.date, vatDate);
+    if (dateError) { setEntryVatError(dateError); return; }
     if (entryForm.type === "expense" && entryForm.wkrType !== "none" && entryForm.wkrValue.trim() && parseOptionalAmountInput(entryForm.wkrValue) === undefined) return;
     if (entryForm.type === "expense" && entryForm.paymentMethod === "dga" && !entryForm.rcDga.trim()) return;
     const amount = parseAmountInput(entryForm.amount);
@@ -2786,6 +2808,7 @@ export default function Home() {
           wkrType: entryForm.wkrType === "none" ? undefined : entryForm.wkrType as "free" | "exempt" | "nil",
           // With split VAT lines the default fiscal value is the gross value per line.
           date: entryForm.date,
+          vatDate: vatDate !== entryForm.date ? vatDate : undefined,
           invoiceNumber: entryForm.invoiceNumber.trim() || undefined,
           description: `${entryForm.description.trim()} · ${line.vatRate}% btw`,
           relation: entryForm.relation.trim() || "Onbekende relatie",
@@ -2799,6 +2822,8 @@ export default function Home() {
         };
       });
 
+      const correctionError = deferredVatError(active.entries, entries, vatDeductionPercent);
+      if (correctionError) { setEntryVatError(correctionError); return; }
       updateActive({
         ...active,
         entries: [...entries, ...active.entries],
@@ -2853,6 +2878,7 @@ export default function Home() {
       wkrValue: entryForm.type === "expense" && entryForm.wkrType !== "none" && entryForm.wkrValue.trim() ? parseOptionalAmountInput(entryForm.wkrValue) : undefined,
       cashAmount: editingEntryId ? active.entries.find((item) => item.id === editingEntryId)?.cashAmount : undefined,
       date: entryForm.date,
+      vatDate: vatDate !== entryForm.date ? vatDate : undefined,
       invoiceNumber: salesInvoiceNumber || undefined,
       description: entryForm.description.trim(),
       relation: entryForm.relation.trim() || "Onbekende relatie",
@@ -2878,6 +2904,8 @@ export default function Home() {
         : undefined,
     };
 
+    const correctionError = deferredVatError(active.entries.filter((item) => item.id !== editingEntryId), [entry], vatDeductionPercent);
+    if (correctionError) { setEntryVatError(correctionError); return; }
     updateActive({
       ...active,
       entries: editingEntryId
@@ -3125,6 +3153,7 @@ export default function Home() {
 
     const entries: Entry[] = bookableInvoiceDrafts.flatMap((draft) => {
       const draftAmount = parseAmountInput(draft.amount);
+      const vatDate = resolveVatDate(draft.type, draft.date, draft.vatDate, active.fiscalYear, period);
       const splitLines =
         draft.vatLines.length > 1
           ? getValidInvoiceVatLines(draft)
@@ -3134,6 +3163,7 @@ export default function Home() {
         return splitLines.map((line) => ({
           id: uid(),
           date: draft.date || today,
+          vatDate: vatDate !== draft.date ? vatDate : undefined,
           invoiceNumber: draft.invoiceNumber.trim() || undefined,
           description: `${draft.description.trim()} · ${line.vatRate}% btw`,
           relation: draft.relation.trim() || "Onbekende relatie",
@@ -3152,6 +3182,7 @@ export default function Home() {
         {
           id: uid(),
           date: draft.date || today,
+          vatDate: vatDate !== draft.date ? vatDate : undefined,
           invoiceNumber: draft.invoiceNumber.trim() || undefined,
           description: draft.description.trim(),
           relation: draft.relation.trim() || "Onbekende relatie",
@@ -3165,6 +3196,8 @@ export default function Home() {
       ];
     });
 
+    const correctionError = deferredVatError(active.entries, entries, vatDeductionPercent);
+    if (correctionError) { setInvoiceImportStatus(correctionError); return; }
     updateActive({
       ...active,
       entries: [...entries, ...active.entries],
@@ -3494,12 +3527,14 @@ export default function Home() {
     if (entry.payrollDeclarationId) { setTab("payrollTax"); return; }
     if (entry.balanceOnly && entry.rcDga) { setTab("rc"); return; }
     if (entry.salaryRecordId) { setTab(activeSalaries.find(s => s.id === entry.salaryRecordId)?.employeePayroll ? "employeePayroll" : "payroll"); return; }
+    setEntryVatError("");
     setEntryForm({
       paymentMethod: entry.rcDga ? "dga" : "company",
       rcDga: entry.rcDga ?? "",
       wkrType: entry.wkrType ?? "none",
       wkrValue: entry.wkrValue === undefined ? "" : formatDecimalInput(entry.wkrValue),
       date: entry.date,
+      vatDate: entry.vatDate || "invoice",
       invoiceNumber: entry.invoiceNumber ?? "",
       description: entry.description,
       relation: entry.relation === "Onbekende relatie" ? "" : entry.relation,
@@ -3547,6 +3582,7 @@ export default function Home() {
 
   const cancelEditEntry = () => {
     setEntryForm(emptyEntry);
+    setEntryVatError("");
     setEditingEntryId(null);
   };
 
@@ -3668,7 +3704,7 @@ export default function Home() {
     downloadBlob(
       `${vatPdfMonth === "period" ? periodFileBase : `${safeFileName(active.name)}-${active.fiscalYear}-${vatPdfMonth}`}-btw-overzicht.pdf`,
       buildVatOverviewPdf(active,
-        vatPdfMonth === "period" ? vatOverview : buildVatOverview(filterMonth(active.entries, `${active.fiscalYear}-${vatPdfMonth}`), vatDeductionPercent),
+        vatPdfMonth === "period" ? vatOverview : buildVatOverview(filterVatMonth(active.entries, `${active.fiscalYear}-${vatPdfMonth}`), vatDeductionPercent),
         vatPdfMonth === "period" ? periodLabel : monthLabel(`${active.fiscalYear}-${vatPdfMonth}`)),
     );
   };
@@ -4057,6 +4093,8 @@ export default function Home() {
                     <Field label="Factuurdatum">
                       <input className="input" type="date" value={entryForm.date} onChange={(event) => setEntryForm({ ...entryForm, date: event.target.value })} />
                     </Field>
+                    {entryForm.type === "expense" && <VatPeriodField date={entryForm.date} selection={entryForm.vatDate} year={active.fiscalYear} period={period} onChange={(vatDate) => { setEntryVatError(""); setEntryForm({ ...entryForm, vatDate }); }} />}
+                    {entryVatError && <p role="alert" className="text-sm text-red-700">{entryVatError}</p>}
                     <div className="grid gap-1 text-sm font-semibold text-[var(--ink)]">
                       <label htmlFor="entry-invoice-number">Factuurnummer</label>
                       <input
@@ -4506,6 +4544,8 @@ export default function Home() {
 
           {tab === "invoices" && (
             <InvoiceImportPanel
+              fiscalYear={active.fiscalYear}
+              period={period}
               bookableCount={bookableInvoiceDrafts.length}
               contacts={active.contacts}
               drafts={invoiceDrafts}
@@ -5167,13 +5207,15 @@ export default function Home() {
                 <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                   <Metric label="Ontvangen btw" value={money.format(summary.vatToPay)} accent="teal" />
                   <Metric label="Aftrekbare btw" value={money.format(summary.vatToClaim)} accent="blue" />
-                  <Metric label="Niet aftrekbaar" value={money.format(summary.nonDeductibleVat)} accent="yellow" />
+                  <Metric label="Niet aftrekbaar" value={money.format(vatOverview.nonDeductibleInputVatTotal)} accent="yellow" />
                   <Metric
                     label={vatBalance >= 0 ? "Te betalen" : "Terug te vragen"}
                     value={money.format(Math.abs(vatBalance))}
                     accent={vatBalance >= 0 ? "coral" : "blue"}
                   />
                 </div>
+                <p className="mt-4 text-sm leading-6 text-[var(--muted)]">Btw volgt de btw-datum; kosten volgen de factuurdatum. Kies bovenaan het kwartaal waarvoor je aangifte voorbereidt. De gekozen btw-datum wordt bij het boeken vastgelegd. Bestaande boekingen worden niet automatisch verschoven.</p>
+                {vatOverview.deferredEntries.length > 0 && <div className="mt-4 text-sm"><strong>Inkoopfacturen uit eerdere kwartalen</strong><ul className="mt-2 grid gap-1">{vatOverview.deferredEntries.map((entry) => <li key={entry.id}>{entry.invoiceNumber || entry.description}: factuur {entry.date} → btw {getVatDate(entry)} · {money.format(getEntryVatAmount(entry) * vatDeductionPercent / 100)}</li>)}</ul></div>}
                 <p className="mt-4 text-sm leading-6 text-[var(--muted)]">
                   {summary.depreciationCount
                     ? `${summary.depreciationCount} investering(en) worden verdeeld over 5 of 10 jaar.`
@@ -5938,6 +5980,8 @@ function EntryTable({
 }
 
 function InvoiceImportPanel({
+  fiscalYear,
+  period,
   bookableCount,
   contacts,
   drafts,
@@ -5952,6 +5996,8 @@ function InvoiceImportPanel({
   onUpdateVatLine,
   selectedCount,
 }: {
+  fiscalYear: number;
+  period: PeriodKey;
   bookableCount: number;
   contacts: Contact[];
   drafts: InvoiceDraft[];
@@ -6041,9 +6087,9 @@ function InvoiceImportPanel({
           const validVatLines = getValidInvoiceVatLines(draft);
           const splitTotal = calculateInvoiceVatLineTotal(draft.vatLines);
           const usesSplitLines = draft.vatLines.length > 1;
-          const isBookable = usesSplitLines
+          const isBookable = !vatDateError(draft.type, draft.date, resolveVatDate(draft.type, draft.date, draft.vatDate, fiscalYear, period)) && (usesSplitLines
             ? draft.description.trim() && validVatLines.length === draft.vatLines.length
-            : draft.description.trim() && isValidBookingAmount(amount);
+            : draft.description.trim() && isValidBookingAmount(amount));
 
           return (
             <article className="invoice-draft-card" key={draft.id}>
@@ -6085,6 +6131,7 @@ function InvoiceImportPanel({
                     onChange={(event) => onUpdate(draft.id, "date", event.target.value)}
                   />
                 </Field>
+                {draft.type === "expense" && <VatPeriodField date={draft.date} selection={draft.vatDate} year={fiscalYear} period={period} onChange={(value) => onUpdate(draft.id, "vatDate", value)} />}
                 <Field label="Factuurnummer">
                   <input
                     className="input"
