@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
 type Entry = AccountingEntryFields & {
   id: string;
   date: string;
+  vatDate?: string;
   invoiceNumber?: string;
   description: string;
   relation: string;

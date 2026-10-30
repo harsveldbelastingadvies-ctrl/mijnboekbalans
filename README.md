@@ -174,3 +174,33 @@ Bronnen: [loonstrookvereisten RVO](https://ondernemersplein.overheid.nl/wetten-e
 [Handboek Loonheffingen](https://www.belastingdienst.nl/wps/wcm/connect/bldcontentnl/themaoverstijgend/brochures_en_publicaties/handboek-loonheffingen),
 [minimumuurloon 2026](https://www.rijksoverheid.nl/themas/werk/minimumloon/bedragen-minimumloon/bedragen-minimumloon-2026),
 [premies 2026](https://www.belastingdienst.nl/wps/wcm/connect/bldcontenten/belastingdienst/business/payroll_taxes/you_are_not_established_in_the_netherlands_are_you_required_to_withhold_payroll_taxes/when_you_are_going_to_withhold_payroll_taxes/calculating_payroll_taxes/rates/rates-2026/table-9-employed-persons-insurance-scheme-contributrions-2026).
+
+## Inkoopfacturen uit eerdere kwartalen
+
+Kies bovenaan het kwartaal waarvoor de eerstvolgende btw-aangifte wordt voorbereid.
+Bij nieuwe uitgaven en geïmporteerde inkoopfacturen stelt **Btw-tijdvak** voor om
+facturen uit eerdere kwartalen van hetzelfde boekjaar in dit kwartaal mee te nemen.
+De voorgestelde btw-datum is de eerste dag van dat kwartaal. Controleer altijd of
+dit de eerstvolgende aangifte is; BoekBalans kent de indieningsstatus niet.
+Bij de selectie **Hele boekjaar** wordt niets automatisch doorgeschoven.
+
+De oorspronkelijke factuurdatum blijft bepalend voor kosten en open posten.
+**Zelf een btw-datum kiezen** ondersteunt ook een specifieke maand; kies
+**Oorspronkelijke factuurdatum** voor verwerking/correctie in het oude tijdvak.
+De gekozen btw-datum wordt per boekingsregel opgeslagen en blijft bij bewerken,
+betalen, opslaan en JSON-backups behouden. Oude boekingen worden niet gemigreerd;
+open die afzonderlijk om hun btw-datum aan te passen. Verkoopfacturen, salarissen
+en balansmutaties worden niet doorgeschoven.
+
+De btw-kaarten, maand- en kwartaaloverzichten en btw-PDF gebruiken de btw-datum.
+De btw-PDF specificeert doorgeschoven facturen met beide datums. Kosten en winst
+blijven op de factuurdatum. De toepassing dient geen btw-aangifte of suppletie in.
+
+Voor vergeten voorbelasting is doorschuiven beperkt tot een totale correctie van
+maximaal EUR 1.000. Bij het boeken worden de doorgeschoven regels van het
+ontvangende kwartaal opgeteld (na aftrekpercentage, inclusief creditnota's).
+Boven die grens wordt doorschuiven geweigerd; verwerk de oorspronkelijke periode
+via een suppletie. Beoordeel ook andere correcties die BoekBalans niet bijhoudt.
+Facturen uit een ander boekjaar volgen niet automatisch deze route.
+
+Bron: [Belastingdienst — btw-aangifte corrigeren](https://www.belastingdienst.nl/wps/wcm/connect/bldcontentnl/belastingdienst/zakelijk/btw/btw_aangifte_doen_en_betalen/aangifte_corrigeren/).
