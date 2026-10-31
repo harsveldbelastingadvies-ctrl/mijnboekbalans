@@ -1,6 +1,7 @@
 export type VatDatedEntry = {
   date: string;
   vatDate?: string;
+  salesVat?: { treatment: string; serviceDate: string };
   type: "income" | "expense";
   amount: number;
   vatRate: number;
@@ -16,6 +17,7 @@ export const isDate = (date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date) &&
 
 // Never move sales, payroll or balance entries through purchase VAT selection.
 export function getVatDate(entry: VatDatedEntry) {
+  if (entry.type === "income" && entry.salesVat?.treatment === "eu_services" && isDate(entry.salesVat.serviceDate) && !entry.balanceOnly && !entry.salaryRecordId && !entry.payrollDeclarationId) return entry.salesVat.serviceDate;
   return entry.type === "expense" && !entry.balanceOnly && !entry.salaryRecordId && !entry.payrollDeclarationId &&
     entry.vatDate && isDate(entry.vatDate) ? entry.vatDate : entry.date;
 }
@@ -54,7 +56,7 @@ export function vatDateError(type: "income" | "expense", date: string, vatDate: 
 
 export function isDeferredVat(entry: VatDatedEntry) {
   const date = getVatDate(entry);
-  return date !== entry.date && (date.slice(0, 4) !== entry.date.slice(0, 4) || quarter(date) !== quarter(entry.date));
+  return entry.type === "expense" && date !== entry.date && (date.slice(0, 4) !== entry.date.slice(0, 4) || quarter(date) !== quarter(entry.date));
 }
 
 // Aggregate all shifted purchase lines in the affected target quarter, including credit notes.

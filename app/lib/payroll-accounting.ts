@@ -1,5 +1,7 @@
+import { invoicedVat, type SalesVatDetails } from "./international-vat.ts";
 import type { EmployeePayroll } from "./employee-payroll";
 export type AccountingEntryFields = {
+  salesVat?: SalesVatDetails;
   payrollSettlement?: "pension" | "deduction";
   payrollSettlementFund?: string;
   balanceOnly?: boolean;
@@ -48,7 +50,7 @@ export function vatEntries<T extends FinanceEntry>(entries: T[]) {
   return entries.filter((entry) => !entry.balanceOnly && !entry.salaryRecordId && !entry.payrollDeclarationId);
 }
 export function companyCashAmount(entry: FinanceEntry) {
-  return entry.rcDga && !entry.balanceOnly ? 0 : entry.cashAmount ?? cents(entry.amount * (1 + entry.vatRate / 100));
+  return entry.rcDga && !entry.balanceOnly ? 0 : entry.cashAmount ?? cents(entry.amount + invoicedVat(entry));
 }
 export function payrollTotal(declaration: PayrollDeclaration) {
   return cents(declaration.wageTax + declaration.dgaZvw + declaration.employerZvw + declaration.employeeInsurance + declaration.endLevy + declaration.correction);
