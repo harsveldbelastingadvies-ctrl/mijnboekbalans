@@ -204,3 +204,72 @@ via een suppletie. Beoordeel ook andere correcties die BoekBalans niet bijhoudt.
 Facturen uit een ander boekjaar volgen niet automatisch deze route.
 
 Bron: [Belastingdienst — btw-aangifte corrigeren](https://www.belastingdienst.nl/wps/wcm/connect/bldcontentnl/belastingdienst/zakelijk/btw/btw_aangifte_doen_en_betalen/aangifte_corrigeren/).
+
+## Internationale verkoop-btw, ICP en buitenlandse btw
+
+Bij handmatige **Inkomsten** en bij geïmporteerde verkoopfacturen staat nu
+**Btw-behandeling verkoopfactuur**. Leg de behandeling, ISO-landcode en soort
+afnemer per factuur vast. De keuze wordt opgeslagen met de boeking; bestaande
+boekingen houden hun oude behandeling totdat je ze beoordeelt en wijzigt.
+Gebruik EU-btw-landen, niet het geografische Europa: GB, NO en CH vallen buiten
+de EU. XI wordt alleen ondersteund voor EU-goederenleveringen in Noord-Ierland.
+
+Ondersteunde keuzes:
+
+| Keuze | Nederlandse aangifte | ICP |
+| --- | --- | --- |
+| Nederlandse btw, ook bij buitenlandse klant | 1a, 1b of 1e bij 0% | Nee |
+| EU-goederenlevering met 0% | 3b | Goederen per btw-id |
+| Belaste EU-B2B-dienst, btw verlegd | 3b | Diensten per btw-id |
+| Uitvoer goederen buiten EU | 3a | Nee |
+| Dienst belast buiten EU | Buiten Nederlandse aangifte | Nee |
+| EU-particulier: buitenlandse btw via OSS | Buiten Nederlandse aangifte, ook buiten 3c | Nee |
+| Afstands-/installatielevering EU met lokale aangifte | 3c, alleen omzet | Nee |
+| Dienst belast in buitenland met lokale aangifte | Buiten Nederlandse aangifte | Nee |
+| Vrijgestelde omzet | Buiten Nederlandse aangifte | Nee |
+
+De gebruiker bevestigt de plaats van prestatie en voorwaarden. Bij ICP zijn een
+buitenlands btw-id, de bevestigde VIES-controle en (bij diensten) de leverdatum
+vereist. De app controleert land/prefix/syntaxis, niet de daadwerkelijke geldigheid
+bij VIES. Bewaar controlebewijs en vervoer-/uitvoerdocumenten; een dossierverwijzing
+kan op de boeking worden vastgelegd. Op de externe verkoopfactuur moeten de juiste
+wettelijke vermeldingen en btw-id's staan. BoekBalans maakt/importeert boekingen;
+deze uitbreiding genereert geen externe verkoopfactuur.
+
+Intracommunautaire diensten volgen de opgegeven leverdatum in btw-overzicht én
+ICP; de omzet blijft boekhoudkundig op de factuurdatum. Daardoor kan een dienst
+in een ander kwartaal of jaar voor de btw meetellen. Goederen volgen de
+factuurdatum. Doorlopende prestaties, voorschotten, eerdere aangiftecorrecties en
+bijzondere tijdvakregels moet de adviseur afzonderlijk beoordelen.
+
+Btw-overzicht en btw-PDF bevatten verkooprubrieken, ICP met afzonderlijke kolommen
+voor goederen/diensten en aansluiting met 3b, buitenlandse btw per land/route en
+omzet buiten de Nederlandse aangifte. Alle bedragen worden in euro ingevoerd.
+Buitenlandse btw wordt apart ingevoerd (creditnota: negatief), telt mee in bruto
+factuurbedrag/open posten/bankbedrag en reservering, maar niet in Nederlandse
+verschuldigde btw. Bij een gesplitste factuur wordt het buitenlandse btw-bedrag
+naar rato verdeeld met een afrondingsrest op de laatste regel. Gebruik aparte
+boekingen als binnen één factuur verschillende fiscale routes moeten gelden.
+
+Bij particulieren moet je de plaats van levering/dienst, buitenlandse registratie,
+OSS-keuze en de gezamenlijke drempel voor EU-afstandsverkopen en digitale diensten
+beoordelen (EUR 10.000, huidig en vorig jaar, inclusief toepassingsvoorwaarden).
+BoekBalans bepaalt geen buitenlandse tarieven en bewaakt deze drempel niet
+automatisch. Het buitenlandse overzicht is geen volledige OSS-specificatie per
+tarief en dient geen OSS-melding, lokale aangifte of ICP in. De gebruiker bepaalt
+ook de vereiste ICP-frequentie. EU-KOR, margeregeling, ABC/voorraadtransacties,
+bijzondere btw-gebieden en plaats-van-dienst-uitzonderingen vereisen afzonderlijke
+beoordeling; kies de route pas na die beoordeling.
+
+Internationale belaste omzet en 0%-omzet worden niet als vrijgesteld aangemerkt
+voor het voorstel van de omzetverhouding. Oude 0%-verkopen zonder classificatie
+blijven te beoordelen; ze worden niet stilzwijgend als vrijgesteld overgenomen.
+De voorbelasting/pro-rata-instelling blijft een afzonderlijke fiscale beoordeling.
+Internationale inkopen/verleggingsrubrieken 4a/4b vallen buiten deze uitbreiding
+voor verkoopfacturen.
+
+Bronnen: [EU-diensten](https://www.belastingdienst.nl/wps/wcm/connect/bldcontentnl/belastingdienst/zakelijk/btw/zakendoen_met_het_buitenland/goederen_en_diensten_naar_andere_eu_landen/btw_berekenen_bij_diensten/),
+[ICP](https://www.belastingdienst.nl/wps/wcm/connect/bldcontentnl/belastingdienst/zakelijk/btw/zakendoen_met_het_buitenland/goederen_en_diensten_naar_andere_eu_landen/opgaaf_icp/),
+[goederen buiten EU](https://www.belastingdienst.nl/wps/wcm/connect/bldcontentnl/belastingdienst/zakelijk/btw/zakendoen_met_het_buitenland/zakendoen_buiten_de_eu/aangifte_doen_als_u_zakendoet_buiten_de_eu/aangifte_en_als_u_goederen_uitvoert_naar_niet_eu_landen),
+[diensten buiten EU](https://www.belastingdienst.nl/wps/wcm/connect/bldcontentnl/belastingdienst/zakelijk/btw/zakendoen_met_het_buitenland/zakendoen_buiten_de_eu/aangifte_doen_als_u_zakendoet_buiten_de_eu/aangifte_doen_als_u_diensten_levert_aan_afnemers_in_niet_eu_landen),
+[EU-afstandsverkopen](https://www.belastingdienst.nl/wps/wcm/connect/nl/btw/content/btw-goederen-eu-particulieren).

@@ -4,7 +4,8 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
 import { filterVatPeriod, filterVatMonth, getVatDate, isDeferredVat, resolveVatDate, suggestedVatDate, vatDateError, deferredVatError } from "../app/lib/vat-period.ts";
-import { operatingEntries, vatEntries } from "../app/lib/payroll-accounting.ts";
+import { invoicedVat, dutchVat, buildInternationalVat, usesDutchSalesVat } from "../app/lib/international-vat.ts";
+import { companyCashAmount, operatingEntries, vatEntries } from "../app/lib/payroll-accounting.ts";
 const entry = (extra = {}) => ({ id: "e", date: "2026-02-15", type: "expense", amount: 100, vatRate: 21, description: "Inkoop", relation: "Leverancier", category: "Kantoorkosten", status: "open", ...extra });
 
 // Exercise the actual page calculations as well as the period selectors, without a browser or user data.
@@ -12,7 +13,7 @@ const source = ts.createSourceFile("page.tsx", readFileSync(new URL("../app/page
 const names = ["calculateTotals", "getEntryVatAmount", "getEntryTotalInclVat", "getEntryProfitLossAmount", "getEntryQuarter", "filterEntriesByPeriod", "getQuarterSummaries", "buildVatOverview", "buildMonthlyFinancialOverview", "buildMonthlySpendableOverview", "getMonthKeyFromDate", "getMonthLabel"];
 const declarations = source.statements.filter((node) => ts.isFunctionDeclaration(node) && names.includes(node.name?.text)).map((node) => node.getText(source)).join("\n");
 const context = vm.createContext({ operatingEntries, vatEntries, filterVatPeriod, filterVatMonth, getVatDate, isDeferredVat,
-  companyCashAmount: (entry) => entry.amount * (1 + entry.vatRate / 100), clampPercent: (n) => Math.max(0, Math.min(100, n)), loanCategory: "Financiering" });
+  companyCashAmount, invoicedVat, dutchVat, buildInternationalVat, usesDutchSalesVat, clampPercent: (n) => Math.max(0, Math.min(100, n)), loanCategory: "Financiering" });
 vm.runInContext(ts.transpile(declarations, { target: ts.ScriptTarget.ES2020 }), context);
 
 test("Q1 invoice claimed in Q3 once; costs and open balance remain in Q1", () => {
@@ -73,4 +74,25 @@ test("EUR 1000 limit uses combined deductible VAT, including split lines and cre
   assert.ok(deferredVatError([], [row(-1001)]));
   assert.equal(deferredVatError([row(600)], [row(600, { vatDate: "2026-10-01" })]), "");
   assert.equal(context.buildVatOverview([row(100), row(-20)], 50).deductibleInputVatTotal, 40);
+});
+
+test("international sales use separate Dutch VAT totals and service dates throughout actual reports", () => {
+  const details = (treatment, extra = {}) => ({ treatment, country: "DE", customerType: "business", customerVatId: "DE123456789", vatIdChecked: true, conditionsConfirmed: true, serviceDate: "2026-09-30", evidence: "Dossier", foreignVatAmount: 0, ...extra });
+  const service = entry({ id: "service", type: "income", date: "2026-10-10", amount: 1000, vatRate: 0, salesVat: details("eu_services") });
+  const oss = entry({ id: "oss", type: "income", date: "2026-09-01", amount: 100, vatRate: 0, salesVat: details("oss", { customerType: "private", foreignVatAmount: 19 }) });
+  const domestic = entry({ id: "domestic", type: "income", date: "2026-09-05", amount: 200 });
+  const entries = [service, oss, domestic];
+  const quarters = context.getQuarterSummaries(entries, 2026);
+  assert.equal(quarters[2].summary.revenue, 300);
+  assert.equal(quarters[2].summary.open, 361);
+  assert.equal(quarters[2].summary.vatToPay, 42);
+  assert.equal(quarters[3].summary.revenue, 1000);
+  assert.equal(quarters[3].summary.vatToPay, 0);
+  const overview = context.buildVatOverview(filterVatPeriod(entries, 2026, "q3"));
+  assert.equal(overview.salesVatTotal, 42);
+  assert.equal(overview.international.icpTotal, 1000);
+  assert.equal(overview.international.foreignVatTotal, 19);
+  const months = context.buildMonthlyFinancialOverview(entries, 2026);
+  assert.equal(months[8].vatBalance, 42);
+  assert.equal(months[9].vatBalance, 0);
 });

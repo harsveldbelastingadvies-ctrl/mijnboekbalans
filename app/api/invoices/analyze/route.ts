@@ -14,16 +14,17 @@ type InvoiceAnalysis = {
   customerName: string;
   customerKvk: string;
   customerVatNumber: string;
+  customerCountry: string;
   type: "income" | "expense";
   category: string;
   amountExVat: number;
   amountVat: number;
   amountInclVat: number;
-  vatRate: 0 | 9 | 21;
+  vatRate: number;
   vatLines: Array<{
     category: string;
     amountExVat: number;
-    vatRate: 0 | 9 | 21;
+    vatRate: number;
   }>;
   status: "paid" | "open";
   confidence: number;
@@ -163,7 +164,7 @@ function normalizeAnalysis(value: unknown, administrationJson: string): InvoiceA
           ? "income"
           : "expense";
   const rawVatRate = Number(data.vatRate);
-  const vatRate = rawVatRate === 9 || rawVatRate === 0 ? rawVatRate : 21;
+  const vatRate = type === "income" && Number.isFinite(rawVatRate) && rawVatRate >= 0 && rawVatRate <= 100 ? rawVatRate : rawVatRate === 9 || rawVatRate === 0 ? rawVatRate : 21;
   const rawAmountExVat = Number(data.amountExVat);
   const rawAmountVat = Number(data.amountVat);
   const rawAmountInclVat = Number(data.amountInclVat);
@@ -218,7 +219,7 @@ function normalizeAnalysis(value: unknown, administrationJson: string): InvoiceA
               ? "Omzet diensten"
               : "Inkoop",
         amountExVat: isFiniteNonZero(signedLineAmount) ? signedLineAmount : 0,
-        vatRate: (lineVatRate === 9 || lineVatRate === 0 ? lineVatRate : 21) as 0 | 9 | 21,
+        vatRate: type === "income" && Number.isFinite(lineVatRate) && lineVatRate >= 0 && lineVatRate <= 100 ? lineVatRate : lineVatRate === 9 || lineVatRate === 0 ? lineVatRate : 21,
       };
     })
     .filter((line) => line.amountExVat !== 0);
@@ -279,6 +280,7 @@ function normalizeAnalysis(value: unknown, administrationJson: string): InvoiceA
     customerName,
     customerKvk,
     customerVatNumber,
+    customerCountry: getString(data, "customerCountry").toUpperCase(),
     type,
     category,
     amountExVat,
@@ -360,12 +362,13 @@ export async function POST(request: NextRequest) {
     customerName: { type: "string" },
     customerKvk: { type: "string" },
     customerVatNumber: { type: "string" },
+    customerCountry: { type: "string", description: "ISO-landcode met twee letters van de afnemer; lege string als onbekend" },
     type: { type: "string", enum: ["income", "expense"] },
     category: { type: "string" },
     amountExVat: { type: "number" },
     amountVat: { type: "number" },
     amountInclVat: { type: "number" },
-    vatRate: { type: "number", enum: [0, 9, 21] },
+    vatRate: { type: "number", minimum: 0, maximum: 100 },
     vatLines: {
       type: "array",
       items: {
@@ -374,7 +377,7 @@ export async function POST(request: NextRequest) {
         properties: {
           category: { type: "string" },
           amountExVat: { type: "number" },
-          vatRate: { type: "number", enum: [0, 9, 21] },
+          vatRate: { type: "number", minimum: 0, maximum: 100 },
         },
         required: ["category", "amountExVat", "vatRate"],
       },
@@ -394,6 +397,7 @@ export async function POST(request: NextRequest) {
     "customerName",
     "customerKvk",
     "customerVatNumber",
+    "customerCountry",
     "type",
     "category",
     "amountExVat",
@@ -416,6 +420,7 @@ export async function POST(request: NextRequest) {
     "Gebruik NOOIT het totaal inclusief btw als amountExVat. Als alleen inclusief btw zichtbaar is, reken amountExVat terug met het gekozen btw-tarief.",
     "Bij een creditfactuur of creditnota moeten amountExVat, amountVat, amountInclVat en vatLines.amountExVat negatief zijn.",
     "Vul supplierName/supplierKvk/supplierVatNumber met de afzender/leverancier van de factuur.",
+    "Neem customerCountry over uit het adres van de klant (ISO-landcode). Raad geen fiscale regeling; neem bij buitenlandse verkoop het werkelijke btw-percentage en bedragen over.",
     "Vul customerName/customerKvk/customerVatNumber met de afnemer/klant aan wie is gefactureerd.",
     "Bij een verkoopfactuur is relation gelijk aan customerName. Bij een inkoopfactuur of bon is relation gelijk aan supplierName.",
     "Bepaal verkoop versus inkoop vanuit de eigen administratie hieronder. Als de afzender overeenkomt met de eigen administratie, is het een verkoopfactuur.",
