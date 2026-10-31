@@ -43,4 +43,4 @@ tsconfig.tsbuildinfo
 /work/
 
 # local BoekBalans data
-/data/*.json
+/data/

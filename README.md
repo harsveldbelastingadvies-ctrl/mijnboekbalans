@@ -317,3 +317,37 @@ handmatige correcties blijven bij het openen beschikbaar.
 
 Bronnen: [Belastingdienst horeca-btw](https://www.belastingdienst.nl/wps/wcm/connect/bldcontentnl/belastingdienst/zakelijk/btw/btw_aftrekken/welke_btw_is_aftrekbaar/bijzondere_situaties/uitgaven_in_de_horeca),
 [beperkt aftrekbare kosten 2026](https://www.belastingdienst.nl/wps/wcm/connect/bldcontentnl/belastingdienst/zakelijk/winst/inkomstenbelasting/veranderingen-inkomstenbelasting-2026/drempel-beperkt-aftrekbare-kosten-2026).
+
+## Werkruimte, documenten en aangiftedossiers
+
+Het startscherm toont doorzoekbare klantenkaarten. Nieuwe klanten worden in twee
+stappen aangemaakt; alleen naam en boekjaar zijn vereist. Boekingen, factuurconcepten
+en documenten worden steeds vanuit de actieve administratie geopend.
+
+De documentenkast bewaart originele bestanden per administratie, boekjaar en map.
+Ondersteunde bestanden: PDF, JPG/JPEG, PNG, WebP, DOCX, XLSX, CSV, TXT, XML en UBL;
+maximaal 5 MB per bestand. Factuurimport probeert de originele bestanden meteen
+te archiveren en koppelt succesvolle uploads aan de resulterende boekingen.
+Een mislukte opslag wordt expliciet gemeld. Bestaande boekingen krijgen niet
+achteraf automatisch een origineel document.
+
+In productie gebruikt de documentenkast de bestaande D1-binding `DB`, met aparte
+metadata- en bestandstabellen. De tabellen worden na geautoriseerde toegang
+idempotent aangemaakt; `drizzle/0001_administration_documents.sql` bevat dezelfde
+schemawijziging. Bestanden worden in stukken van 128 KiB bewaard, met SHA-256
+integriteitscontrole. Iedere documentactie controleert de bestaande werkruimte-PIN
+en het lidmaatschap van de administratie. Dit blijft één gedeelde kantoorwerkruimte,
+geen afzonderlijk klantenportaal of autorisatie per medewerker. Ontbreekt de
+productiedatabase, dan faalt de opslag zichtbaar. Alleen lokaal wordt `data/`
+gebruikt. De gewone JSON-back-up bevat de administratie en documentverwijzingen,
+**niet de documentbestanden**; download die afzonderlijk en neem de D1-database
+mee in het operationele back-upbeleid.
+
+De aangiftewerkruimte heeft een eigen scherm zonder de gewone navigatie en
+administratieoverzichten. Voor omzetbelasting kan een vaste controleversie worden
+bewaard en als PDF worden geëxporteerd. Latere boekingen wijzigen die versie niet.
+De bestaande ondersteunde rubrieken en btw-datumfilters blijven de bron; overige
+rubrieken en correcties vereisen afzonderlijke beoordeling. Er is **geen directe
+verzending naar de Belastingdienst**. Pas na externe indiening registreert de
+gebruiker een datum, kenmerk en eventueel een ontvangstbevestiging. De bestaande
+loonheffingenmodule is eveneens vanuit deze werkruimte bereikbaar.
