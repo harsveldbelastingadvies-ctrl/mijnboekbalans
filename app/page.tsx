@@ -1,4 +1,6 @@
 "use client";
+import { formatDutchDate, formatDutchTimestamp } from "./lib/dutch-date";
+import { DutchDateInput } from "./components/dutch-date-input";
 
 import {
   ChangeEvent,
@@ -30,11 +32,20 @@ import { allocateForeignVat, isTaxableSalesTurnover, buildInternationalVat, dutc
 import { ExpenseTaxTool } from "./components/expense-tax-tool";
 import { deductibleExpenseVat, expenseCents, expenseTaxError, expenseTaxOptions, expenseTaxPreview, isRestaurant, prepareExpenseTaxLines, type ExpenseTaxRule } from "./lib/expense-tax";
 
+import { ClientWorkspace, type ClientDetails } from "./components/client-workspace";
+import { DocumentsPanel } from "./components/documents-panel";
+import { FilingWorkspace } from "./components/filing-workspace";
+import { uploadAdministrationDocument, downloadAdministrationDocument } from "./lib/documents";
+import type { FilingDossier, FilingSnapshot } from "./lib/filing-workspace";
+
 type EntryType = "income" | "expense";
 type EntryStatus = "paid" | "open";
 type LoanInterestType = "manual" | "nominal" | "effective";
 type ZvwContributionType = "dga_contribution" | "employer_levy";
 type TabKey =
+  | "clients"
+  | "documents"
+  | "filings"
   | "overview"
   | "entries"
   | "invoices"
@@ -110,6 +121,8 @@ type InvoiceVatLine = {
 };
 
 type InvoiceDraft = {
+  administrationId?: string;
+  documentId?: string;
   expenseTaxRule?: ExpenseTaxRule;
   inputVatBlocked?: boolean;
   nonDeductibleAmount?: string;
@@ -140,6 +153,10 @@ type InvoiceDraft = {
 };
 
 type Administration = {
+  email?: string;
+  phone?: string;
+  address?: string;
+  filingDossiers?: FilingDossier[];
   id: string;
   name: string;
   owner: string;
@@ -704,11 +721,11 @@ function formatEntryProcessing(entry: Entry) {
   if (entry.type === "income" && entry.salesVat) {
     parts.push(`${entry.salesVat.country} · ${salesVatOptions.find(([key]) => key === entry.salesVat?.treatment)?.[1] ?? entry.salesVat.treatment}`);
     if (entry.salesVat.customerVatId) parts.push(entry.salesVat.customerVatId);
-    if (entry.salesVat.serviceDate) parts.push(`Dienst geleverd ${entry.salesVat.serviceDate}`);
+    if (entry.salesVat.serviceDate) parts.push(`Dienst geleverd ${formatDutchDate(entry.salesVat.serviceDate)}`);
     if (isForeignVat(entry.salesVat.treatment)) parts.push(`Buitenlandse btw ${money.format(entry.salesVat.foreignVatAmount)}`);
     if (entry.salesVat.evidence) parts.push(entry.salesVat.evidence);
   }
-  if (getVatDate(entry) !== entry.date) parts.push(`Btw-datum ${getVatDate(entry)}`);
+  if (getVatDate(entry) !== entry.date) parts.push(`Btw-datum ${formatDutchDate(getVatDate(entry))}`);
   if (entry.balanceOnly) parts.push("Balanspost; geen omzet, kosten of btw");
   if (entry.rcDga) parts.push(`Rekening-courant ${entry.rcDga}`);
   if (entry.wkrType) parts.push(entry.wkrType === "free" ? "WKR vrije ruimte" : entry.wkrType === "exempt" ? "WKR gericht vrijgesteld" : "WKR nihilwaardering");
@@ -2397,9 +2414,8 @@ function buildPayrollOverviewPdf(admin: Administration, salaries: SalaryRecord[]
 export default function Home() {
   const [administrations, setAdministrations] = useState<Administration[]>(starterData);
   const [activeId, setActiveId] = useState(starterData[0].id);
-  const [tab, setTab] = useState<TabKey>("overview");
+  const [tab, setTab] = useState<TabKey>("clients");
   const [hydrated, setHydrated] = useState(false);
-  const [adminName, setAdminName] = useState("");
   const [entryForm, setEntryForm] = useState(emptyEntry);
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [invoiceDrafts, setInvoiceDrafts] = useState<InvoiceDraft[]>([]);
@@ -2662,7 +2678,8 @@ export default function Home() {
     unknownRelationEntries.length +
     zeroVatEntries.length +
     salaryTotals.openCount;
-  const selectedInvoiceDrafts = invoiceDrafts.filter((draft) => draft.selected);
+  const activeInvoiceDrafts = invoiceDrafts.filter((draft) => draft.administrationId === active.id);
+  const selectedInvoiceDrafts = activeInvoiceDrafts.filter((draft) => draft.selected);
   const bookableInvoiceDrafts = selectedInvoiceDrafts.filter((draft) => {
     const amount = parseAmountInput(draft.amount);
     const validVatLines = getValidInvoiceVatLines(draft);
@@ -2690,27 +2707,13 @@ export default function Home() {
     );
   };
 
-  const addAdministration = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const name = adminName.trim();
-    if (!name) return;
-
-    const next: Administration = {
-      id: uid(),
-      name,
-      owner: "",
-      kvk: "",
-      vatNumber: "",
-      fiscalYear: new Date().getFullYear(),
-      iban: "",
-      entries: [],
-      contacts: [],
-    };
-
-    setAdministrations((items) => [next, ...items]);
-    setActiveId(next.id);
-    setTab("overview");
-    setAdminName("");
+  const openAdministration = (id: string, destination: TabKey = "overview") => {
+    if (id !== active.id) { setEntryForm(emptyEntry); setEditingEntryId(null); setContactForm(emptyContact); setEditingContactId(null); setSalaryForm(emptySalary); setEditingSalaryId(null); setEntryVatError(""); }
+    setActiveId(id); setTab(destination);
+  };
+  const createClient = (details: ClientDetails) => {
+    const next: Administration = { id: uid(), ...details, entries: [], contacts: [], payrollEmployees: [], salaries: [] };
+    setAdministrations((items) => [next, ...items]); setEntryForm(emptyEntry); setEditingEntryId(null); setActiveId(next.id); setTab("overview");
   };
 
   const addEntryVatLine = () => {
@@ -2975,6 +2978,7 @@ export default function Home() {
       rcDga: entryForm.type === "expense" && entryForm.paymentMethod === "dga" ? entryForm.rcDga.trim() : undefined,
       wkrType: entryForm.type === "expense" && entryForm.wkrType !== "none" ? entryForm.wkrType as "free" | "exempt" | "nil" : undefined,
       wkrValue: entryForm.type === "expense" && entryForm.wkrType !== "none" && entryForm.wkrValue.trim() ? parseOptionalAmountInput(entryForm.wkrValue) : undefined,
+      documentId: editingEntryId ? active.entries.find((item) => item.id === editingEntryId)?.documentId : undefined,
       cashAmount: editingEntryId ? active.entries.find((item) => item.id === editingEntryId)?.cashAmount : undefined,
       date: entryForm.date,
       salesVat,
@@ -3137,14 +3141,20 @@ export default function Home() {
         }
       }),
     );
-    const drafts = draftGroups.flat().map((draft) => draft.type === "income" ? { ...draft, salesVat: draft.salesVat ?? { ...emptySalesVat } } : draft);
+    const archiveErrors: string[] = [];
+    const archived = await Promise.all(files.map(async (file, index) => {
+      try { return await uploadAdministrationDocument(file, workspacePin, active.id, active.fiscalYear, draftGroups[index].every((draft) => draft.type === "income") ? "Verkoopfacturen" : "Inkoopfacturen"); }
+      catch (error) { archiveErrors.push(`${file.name}: ${(error as Error).message}`); return null; }
+    }));
+    const drafts = draftGroups.flatMap((group, index) => group.map((draft) => ({ ...draft, administrationId: active.id, documentId: archived[index]?.id,
+      salesVat: draft.type === "income" ? draft.salesVat ?? { ...emptySalesVat } : undefined })));
 
     setInvoiceDrafts((items) => [...drafts, ...items]);
     const fallbackText = fallbackCount
       ? ` ${fallbackCount} bestand(en) zijn lokaal voorgesteld${fallbackMessages.size ? `: ${Array.from(fallbackMessages)[0]}` : "."}`
       : "";
     setInvoiceImportStatus(
-      `${drafts.length} conceptfactuur/facturen toegevoegd. ${localCount} lokaal gelezen. ${aiCount} via AI.${fallbackText} Controleer de voorstellen.`,
+      `${active.name}: ${drafts.length} conceptfactuur/facturen toegevoegd. ${localCount} lokaal gelezen. ${aiCount} via AI.${fallbackText} ${archived.filter(Boolean).length} origineel/originelen in het documentdossier bewaard.${archiveErrors.length ? ` Niet bewaard: ${archiveErrors.join("; ")}` : ""} Controleer de voorstellen.`,
     );
   };
 
@@ -3274,8 +3284,8 @@ export default function Home() {
   };
 
   const clearInvoiceDrafts = () => {
-    setInvoiceDrafts([]);
-    setInvoiceImportStatus("Werkvoorraad geleegd.");
+    setInvoiceDrafts((items) => items.filter((draft) => draft.administrationId !== active.id));
+    setInvoiceImportStatus("Werkvoorraad van deze administratie geleegd; bewaarde documenten blijven in het dossier.");
   };
 
   const bookInvoiceDrafts = () => {
@@ -3300,6 +3310,7 @@ export default function Home() {
           const lineForeignVat = foreignVatLines[index];
           return ({
           id: uid(),
+          documentId: draft.documentId,
           date: draft.date || today,
           salesVat: salesVat ? { ...salesVat, foreignVatAmount: lineForeignVat } : undefined,
           vatDate: vatDate !== draft.date ? vatDate : undefined,
@@ -3320,6 +3331,7 @@ export default function Home() {
       return [
         {
           id: uid(),
+          documentId: draft.documentId,
           date: draft.date || today,
           salesVat,
           vatDate: vatDate !== draft.date ? vatDate : undefined,
@@ -3941,6 +3953,19 @@ export default function Home() {
     }
   };
 
+  const filingSnapshot = (year: number, selectedPeriod: string): FilingSnapshot => {
+    const entries = selectedPeriod.startsWith("m") ? filterVatMonth(active.entries, `${year}-${selectedPeriod.slice(1)}`) : filterVatPeriod(active.entries, year, selectedPeriod as PeriodKey);
+    const overview = buildVatOverview(entries, vatDeductionPercent);
+    const labels: Record<string, string> = { "1a": "Leveringen/diensten hoog tarief", "1b": "Leveringen/diensten laag tarief", "1e": "Nederlandse 0%-omzet", "3a": "Uitvoer goederen buiten EU", "3b": "EU-goederen en -diensten", "3c": "Installatie-/afstandsverkopen lokaal" };
+    return { year, period: selectedPeriod, label: selectedPeriod.startsWith("m") ? monthLabel(`${year}-${selectedPeriod.slice(1)}`).replace(String(year), "").trim() : getPeriodLabel(selectedPeriod as PeriodKey), capturedAt: new Date().toISOString(),
+      rows: overview.international.rubrics.map((row) => ({ ...row, label: labels[row.code] || row.code })), inputVat: overview.deductibleInputVatTotal, balance: overview.vatBalance,
+      icpTotal: overview.international.icpTotal, icpDifference: overview.international.icpDifference, entryCount: vatEntries(entries).length, entryIds: vatEntries(entries).map((entry) => entry.id).sort() };
+  };
+  const downloadFilingSnapshot = (snapshot: FilingSnapshot) => downloadBlob(`${safeFileName(active.name)}-${snapshot.year}-${snapshot.period}-aangiftecontrole.pdf`, buildTablePdf({ ...active, fiscalYear: snapshot.year }, "Aangiftecontrole (geen indieningsbewijs)", `${snapshot.label} ${snapshot.year}`, [
+    { title: "Bewaarde controlecijfers / ondersteunde rubrieken", headers: ["Rubriek", "Omschrijving", "Omzet", "Btw"], widths: [50, 221, 120, 120], rows: [...snapshot.rows.map((row) => [row.code, row.label, money.format(row.basis), money.format(row.vat)]), ["5b", "Aftrekbare voorbelasting", "", money.format(snapshot.inputVat)]] },
+    { title: "Aansluiting en saldo", headers: ["Onderdeel", "Bedrag"], widths: [340,171], rows: [["Saldo volgens ondersteunde rubrieken", money.format(snapshot.balance)], ["ICP totaal", money.format(snapshot.icpTotal)], ["Verschil met 3b", money.format(snapshot.icpDifference)], ["Cijfers vastgelegd op", formatDutchTimestamp(snapshot.capturedAt)]] }
+  ]));
+
   if (workspaceState !== "unlocked") {
     return (
       <WorkspaceGate
@@ -3957,85 +3982,34 @@ export default function Home() {
     );
   }
 
+  if (tab === "filings") return <FilingWorkspace key={active.id} name={active.name} administrationId={active.id} year={active.fiscalYear} pin={workspacePin} dossiers={active.filingDossiers ?? []}
+    saveStatus={saveStatus} buildSnapshot={filingSnapshot} onSave={(filingDossiers) => updateActive({ ...active, filingDossiers })} onPdf={downloadFilingSnapshot} onExit={() => setTab("overview")}
+    payroll={<PayrollTaxPanel key={`${active.id}-${active.fiscalYear}`} admin={active} onChange={(next) => updateActive({ ...active, ...next })} onProcess={processPayrollDeclaration} onPdf={downloadFinancePdf} />} />;
+
   return (
     <>
     <main className="app-shell min-h-screen bg-[var(--surface)] text-[var(--ink)]">
-      <div className="grid min-h-screen lg:grid-cols-[300px_1fr]">
-        <aside className="border-b border-[var(--line)] bg-white/85 px-5 py-5 shadow-sm backdrop-blur lg:border-b-0 lg:border-r">
-          <div className="flex items-center gap-3">
-            <div className="brand-mark">BB</div>
-            <div>
-              <p className="text-xs font-bold uppercase text-[var(--teal)]">
-                BoekBalans
-              </p>
-              <h1 className="text-xl font-semibold">Werkboekhouding</h1>
-            </div>
-          </div>
-
-          <div className="workspace-card">
-            <p className="eyebrow">{workspaceProfile?.workspaceName ?? "Werkruimte"}</p>
-            <p className="mt-1 text-sm font-semibold">{saveStatus}</p>
-            {workspaceProfile?.updatedAt ? (
-              <p className="mt-1 text-xs text-[var(--muted)]">
-                Laatste opslag: {new Date(workspaceProfile.updatedAt).toLocaleString("nl-NL")}
-              </p>
-            ) : null}
-            <button className="soft-button mt-3 w-full justify-center" onClick={lockWorkspace}>
-              Vergrendel
-            </button>
-          </div>
-
-          <form className="mt-6 grid gap-2" onSubmit={addAdministration}>
-            <label className="text-xs font-bold uppercase text-[var(--muted)]">
-              Administraties
-            </label>
-            <div className="flex gap-2">
-              <input
-                aria-label="Nieuwe administratie"
-                className="input min-w-0 flex-1"
-                onChange={(event) => setAdminName(event.target.value)}
-                placeholder="Nieuwe administratie"
-                value={adminName}
-              />
-              <button className="primary-button px-3 py-2 text-sm">Nieuw</button>
-            </div>
-          </form>
-
-          <nav className="mt-5 space-y-2">
-            {administrations.map((admin) => (
-              <button
-                className={`admin-switch ${admin.id === active.id ? "is-active" : ""}`}
-                key={admin.id}
-                onClick={() => {
-                  setActiveId(admin.id);
-                  setTab("overview");
-                }}
-              >
-                <span className="block text-sm font-semibold">{admin.name}</span>
-                <span className="mt-1 block text-xs text-[var(--muted)]">
-                  {admin.entries.length} boekingen, {getAdminSalaries(admin).length} salarisregels
-                </span>
-              </button>
-            ))}
-          </nav>
-
-          <div className="mt-6 rounded-lg bg-[var(--mint)] p-4">
-            <p className="text-sm font-semibold">Snelle export</p>
-            <button className="soft-button mt-3 w-full justify-center" onClick={() => setTab("reports")}>
-              Naar downloads
-            </button>
-          </div>
+      <div className="grid min-h-screen workspace-layout">
+        <aside className="workspace-sidebar">
+          <button className="workspace-brand" onClick={() => setTab("clients")}><span className="brand-mark">B<span>·</span>B</span><span><strong>BoekBalans</strong><small>Helder in je administratie.</small></span></button>
+          <div className="sidebar-section"><span>WERKRUIMTE</span><button className={`sidebar-link ${tab === "clients" ? "is-active" : ""}`} onClick={() => setTab("clients")}><i>▦</i> Klanten & administraties</button></div>
+          <div className="sidebar-section"><span>ACTIEVE ADMINISTRATIE</span><select className="sidebar-client-select" aria-label="Wissel administratie" value={active.id} onChange={(event) => openAdministration(event.target.value)}>{administrations.map((admin) => <option key={admin.id} value={admin.id}>{admin.name}</option>)}</select></div>
+          <nav aria-label="Administratie" className="sidebar-section">{[["overview", "Overzicht", "01"], ["entries", "Boekingen", "02"], ["invoices", "Facturen inlezen", "03"], ["documents", "Documenten", "04"], ["filings", "Aangiftewerkruimte", "05"], ["contacts", "Klanten & leveranciers", "06"]].map(([key,label,icon]) => <button key={key} className={`sidebar-link ${tab === key ? "is-active" : ""}`} onClick={() => setTab(key as TabKey)}><i>{icon}</i>{label}</button>)}</nav>
+          <details className="sidebar-section" open={["payroll","employeePayroll","payrollTax","wkr","rc"].includes(tab)}><summary>SALARIS & DGA</summary>{[["payroll","Salarissen"],["employeePayroll","Medewerkerloonstroken"],["payrollTax","Loonheffingen"],["wkr","Werkkostenregeling"],["rc","Rekening-courant DGA"]].map(([key,label]) => <button key={key} className={`sidebar-link ${tab === key ? "is-active" : ""}`} onClick={() => setTab(key as TabKey)}>{label}</button>)}</details>
+          <nav className="sidebar-section">{[["checks",`Controles${checkCount ? ` (${checkCount})` : ""}`],["reports","Rapporten & downloads"],["settings","Instellingen"]].map(([key,label]) => <button className={`sidebar-link ${tab === key ? "is-active" : ""}`} key={key} onClick={() => setTab(key as TabKey)}>{label}</button>)}</nav>
+          <div className="sidebar-footer"><span className="live-dot" /><small>{saveStatus}</small><button onClick={lockWorkspace}>Vergrendel</button></div>
         </aside>
 
         <section className="min-w-0 px-5 py-5 md:px-8">
-          <header className="hero-panel">
+          <div className="workspace-breadcrumb"><span>Werkruimte</span><span>/</span><strong>{tab === "clients" ? "Klanten & administraties" : active.name}</strong><span className="workspace-breadcrumb-right">{workspaceProfile?.workspaceName || "BoekBalans"}</span></div>
+          {tab !== "clients" && <><header className="hero-panel">
             <div className="min-w-0">
               <p className="text-sm font-semibold text-[var(--teal)]">
                 Actieve administratie
               </p>
               <h2 className="mt-1 text-3xl font-semibold md:text-4xl">{active.name}</h2>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted)]">
-                Een rustige werkplek voor boeken, controleren en overzichten downloaden.
+                Boekjaar {active.fiscalYear} · {active.owner || "Jouw administratie, overzichtelijk op één plek."}
               </p>
             </div>
             <div className="action-row">
@@ -4049,9 +4023,7 @@ export default function Home() {
                   ))}
                 </select>
               </label>
-              <button className="secondary-button" onClick={() => setTab("reports")}>
-                Downloads openen
-              </button>
+              <button className="primary-button" onClick={() => setTab("invoices")}>+ Facturen toevoegen</button>
             </div>
           </header>
 
@@ -4066,30 +4038,10 @@ export default function Home() {
             <Metric label="Open posten" value={money.format(summary.open)} accent="yellow" />
           </div>
 
-          <div className="mt-5 flex flex-wrap gap-2">
-            {[
-              ["overview", "Dashboard"],
-              ["entries", "Boekingen"],
-              ["invoices", "Facturen"],
-              ["payroll", "Salarissen"],
-              ["employeePayroll", "Loonstrook medewerker"],
-              ["payrollTax", "Loonheffingen"],
-              ["wkr", "WKR"],
-              ["rc", "Rekening-courant DGA"],
-              ["checks", checkCount ? `Controle (${checkCount})` : "Controle"],
-              ["reports", "Downloads"],
-              ["contacts", "Relaties"],
-              ["settings", "Instellingen"],
-            ].map(([key, label]) => (
-              <button
-                className={`tab-button ${tab === key ? "is-active" : ""}`}
-                key={key}
-                onClick={() => setTab(key as TabKey)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          </>}
+          {tab === "clients" && <ClientWorkspace clients={administrations} onOpen={openAdministration} onCreate={createClient} />}
+          {tab === "documents" && <DocumentsPanel key={`${active.id}-${active.fiscalYear}`} administrationId={active.id} pin={workspacePin} year={active.fiscalYear} />}
+          {tab === "overview" && <div className="quick-action-grid"><button onClick={() => { cancelEditEntry(); setEntryForm({ ...emptyEntry, type: "expense", category: entryCategories.expense[0] }); setTab("entries"); }}><span>01 / INVOEREN</span><strong>Een boeking toevoegen ↗</strong><small>Inkomsten en uitgaven vastleggen</small></button><button onClick={() => setTab("documents")}><span>02 / BEWAREN</span><strong>Je documentdossier ↗</strong><small>Alle stukken bij de administratie</small></button><button onClick={() => setTab("filings")}><span>03 / CONTROLEREN</span><strong>Een aangifte voorbereiden ↗</strong><small>Een eigen werkruimte voor je aangifte</small></button></div>}
 
           {tab === "overview" && (
             <div className="mt-6 grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
@@ -4236,7 +4188,7 @@ export default function Home() {
                       </datalist>
                     </Field>
                     <Field label="Factuurdatum">
-                      <input className="input" type="date" value={entryForm.date} onChange={(event) => setEntryForm({ ...entryForm, date: event.target.value })} />
+                      <DutchDateInput className="input"  value={entryForm.date} onChange={(event) => setEntryForm({ ...entryForm, date: event.target.value })} />
                     </Field>
                     {entryForm.type === "expense" && <VatPeriodField date={entryForm.date} selection={entryForm.vatDate} year={active.fiscalYear} period={period} onChange={(vatDate) => { setEntryVatError(""); setEntryForm({ ...entryForm, vatDate }); }} />}
                     {entryVatError && <p role="alert" className="text-sm text-red-700">{entryVatError}</p>}
@@ -4371,9 +4323,9 @@ export default function Home() {
                     </Field>
                     {entryForm.status === "paid" ? (
                       <Field label="Betaaldatum">
-                        <input
+                        <DutchDateInput
                           className="input"
-                          type="date"
+
                           value={entryForm.paidDate}
                           onChange={(event) => setEntryForm({ ...entryForm, paidDate: event.target.value })}
                         />
@@ -4624,6 +4576,7 @@ export default function Home() {
 
               <EntryTable
                 entries={filteredEntries}
+                onDocument={(id) => downloadAdministrationDocument(workspacePin, active.id, id).catch((error) => setSaveStatus(error.message))}
                 onEdit={editEntry}
                 onRemove={removeEntry}
                 onDownload={downloadEntries}
@@ -4645,7 +4598,7 @@ export default function Home() {
               period={period}
               bookableCount={bookableInvoiceDrafts.length}
               contacts={active.contacts}
-              drafts={invoiceDrafts}
+              drafts={activeInvoiceDrafts}
               importStatus={invoiceImportStatus}
               onBookSelected={bookInvoiceDrafts}
               onClear={clearInvoiceDrafts}
@@ -4695,9 +4648,9 @@ export default function Home() {
                       />
                     </Field>
                     <Field label="Geboortedatum">
-                      <input
+                      <DutchDateInput
                         className="input"
-                        type="date"
+
                         value={payrollEmployeeForm.birthDate}
                         onChange={(event) =>
                           setPayrollEmployeeForm({ ...payrollEmployeeForm, birthDate: event.target.value })
@@ -4873,9 +4826,9 @@ export default function Home() {
                       />
                     </Field>
                     <Field label="Betaaldatum">
-                      <input
+                      <DutchDateInput
                         className="input"
-                        type="date"
+
                         value={salaryForm.paymentDate}
                         onChange={(event) => setSalaryForm({ ...salaryForm, paymentDate: event.target.value })}
                       />
@@ -5027,7 +4980,7 @@ export default function Home() {
                     <CheckRow
                       key={entry.id}
                       title={entry.description}
-                      meta={`${entry.date} · ${entry.relation} · ${money.format(getEntryTotalInclVat(entry))} incl. btw`}
+                      meta={`${formatDutchDate(entry.date)} · ${entry.relation} · ${money.format(getEntryTotalInclVat(entry))} incl. btw`}
                     >
                       <button className="soft-button" onClick={() => markEntryPaid(entry.id)}>
                         Markeer betaald
@@ -5098,7 +5051,7 @@ export default function Home() {
                     <CheckRow
                       key={entry.id}
                       title={entry.description}
-                      meta={`${entry.date} · ${entry.category} · ${money.format(entry.amount)} excl. btw`}
+                      meta={`${formatDutchDate(entry.date)} · ${entry.category} · ${money.format(entry.amount)} excl. btw`}
                     />
                   ))}
                 </CheckRows>
@@ -5116,14 +5069,14 @@ export default function Home() {
                     <CheckRow
                       key={`relation-${entry.id}`}
                       title="Relatie ontbreekt"
-                      meta={`${entry.date} · ${entry.description}`}
+                      meta={`${formatDutchDate(entry.date)} · ${entry.description}`}
                     />
                   ))}
                   {zeroVatEntries.map((entry) => (
                     <CheckRow
                       key={`vat-${entry.id}`}
                       title="Btw 0%"
-                      meta={`${entry.date} · ${entry.description} · controleer of dit klopt`}
+                      meta={`${formatDutchDate(entry.date)} · ${entry.description} · controleer of dit klopt`}
                     />
                   ))}
                 </CheckRows>
@@ -5314,7 +5267,7 @@ export default function Home() {
                 </div>
                 <p className="mt-4 text-sm leading-6 text-[var(--muted)]">Btw volgt de btw-datum; kosten volgen de factuurdatum. Kies bovenaan het kwartaal waarvoor je aangifte voorbereidt. De gekozen btw-datum wordt bij het boeken vastgelegd. Bestaande boekingen worden niet automatisch verschoven.</p>
                 <InternationalVatReport data={vatOverview.international} />
-                {vatOverview.deferredEntries.length > 0 && <div className="mt-4 text-sm"><strong>Inkoopfacturen uit eerdere kwartalen</strong><ul className="mt-2 grid gap-1">{vatOverview.deferredEntries.map((entry) => <li key={entry.id}>{entry.invoiceNumber || entry.description}: factuur {entry.date} → btw {getVatDate(entry)} · {money.format(deductibleExpenseVat({ ...entry }, Number(vatDeductionPercent)))}</li>)}</ul></div>}
+                {vatOverview.deferredEntries.length > 0 && <div className="mt-4 text-sm"><strong>Inkoopfacturen uit eerdere kwartalen</strong><ul className="mt-2 grid gap-1">{vatOverview.deferredEntries.map((entry) => <li key={entry.id}>{entry.invoiceNumber || entry.description}: factuur {formatDutchDate(entry.date)} → btw {formatDutchDate(getVatDate(entry))} · {money.format(deductibleExpenseVat({ ...entry }, Number(vatDeductionPercent)))}</li>)}</ul></div>}
                 <p className="mt-4 text-sm leading-6 text-[var(--muted)]">
                   {summary.depreciationCount
                     ? `${summary.depreciationCount} investering(en) worden verdeeld over 5 of 10 jaar.`
@@ -5462,6 +5415,9 @@ export default function Home() {
                 <Field label="KvK">
                   <input className="input" value={active.kvk} onChange={(event) => updateSettings("kvk", event.target.value)} />
                 </Field>
+                <Field label="E-mailadres"><input className="input" type="email" value={active.email ?? ""} onChange={(event) => updateSettings("email", event.target.value)} /></Field>
+                <Field label="Telefoonnummer"><input className="input" value={active.phone ?? ""} onChange={(event) => updateSettings("phone", event.target.value)} /></Field>
+                <Field label="Adres"><input className="input" value={active.address ?? ""} onChange={(event) => updateSettings("address", event.target.value)} /></Field>
                 <Field label="Btw-nummer">
                   <input className="input" value={active.vatNumber} onChange={(event) => updateSettings("vatNumber", event.target.value)} />
                 </Field>
@@ -5973,7 +5929,7 @@ function CompactEntries({ entries }: { entries: Entry[] }) {
           <div>
             <strong className="block">{entry.relation}</strong>
             <span className="text-xs text-[var(--muted)]">
-              {entry.date} · {entry.invoiceNumber ? `Factuur ${entry.invoiceNumber} · ` : ""}{entry.description}
+              {formatDutchDate(entry.date)} · {entry.invoiceNumber ? `Factuur ${entry.invoiceNumber} · ` : ""}{entry.description}
             </span>
           </div>
           <span className={getEntryAmountClass(entry)}>{formatSignedEntryAmount(entry)}</span>
@@ -5985,12 +5941,14 @@ function CompactEntries({ entries }: { entries: Entry[] }) {
 
 function EntryTable({
   entries,
+  onDocument,
   onEdit,
   onRemove,
   onDownload,
   periodLabel,
 }: {
   entries: Entry[];
+  onDocument: (id: string) => void;
   onEdit: (entry: Entry) => void;
   onRemove: (entryId: string) => void;
   onDownload: () => void;
@@ -6030,10 +5988,11 @@ function EntryTable({
             {entries.map((entry) => (
               <tr className="border-b border-[var(--line)] last:border-b-0" key={entry.id}>
                 <td className="py-3 pr-3 font-semibold">{entry.relation}</td>
-                <td className="py-3 pr-3">{entry.date}</td>
+                <td className="py-3 pr-3">{formatDutchDate(entry.date)}</td>
                 <td className="py-3 pr-3">{entry.invoiceNumber || "-"}</td>
                 <td className="py-3 pr-3">
                   <strong className="block">{entry.description}</strong>
+                  {entry.documentId && <button className="document-link" onClick={() => onDocument(entry.documentId!)}>↓ Origineel document</button>}
                 </td>
                 <td className="py-3 pr-3">{money.format(entry.amount)}</td>
                 <td className="py-3 pr-3">{entry.vatRate}%</td>
@@ -6230,9 +6189,9 @@ function InvoiceImportPanel({
                   />
                 </Field>
                 <Field label="Factuurdatum">
-                  <input
+                  <DutchDateInput
                     className="input"
-                    type="date"
+
                     value={draft.date}
                     onChange={(event) => onUpdate(draft.id, "date", event.target.value)}
                   />
@@ -6287,9 +6246,9 @@ function InvoiceImportPanel({
                 </Field>
                 {draft.status === "paid" ? (
                   <Field label="Betaaldatum">
-                    <input
+                    <DutchDateInput
                       className="input"
-                      type="date"
+
                       value={draft.paidDate}
                       onChange={(event) => onUpdate(draft.id, "paidDate", event.target.value)}
                     />

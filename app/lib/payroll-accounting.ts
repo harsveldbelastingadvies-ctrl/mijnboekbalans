@@ -2,6 +2,7 @@ import { invoicedVat, type SalesVatDetails } from "./international-vat.ts";
 import type { EmployeePayroll } from "./employee-payroll";
 import type { ExpenseTaxFields } from "./expense-tax";
 export type AccountingEntryFields = ExpenseTaxFields & {
+  documentId?: string;
   salesVat?: SalesVatDetails;
   payrollSettlement?: "pension" | "deduction";
   payrollSettlementFund?: string;
