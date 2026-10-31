@@ -27,6 +27,9 @@ import { InternationalVatReport } from "./components/international-vat-report";
 import { InternationalVatFields } from "./components/international-vat-fields";
 import { allocateForeignVat, isTaxableSalesTurnover, buildInternationalVat, dutchVat, emptySalesVat, invoicedVat, isForeignVat, salesVatDetails, salesVatError, salesVatOptions, toSalesVatDraft, usesDutchSalesVat, type SalesVatDraft } from "./lib/international-vat";
 
+import { ExpenseTaxTool } from "./components/expense-tax-tool";
+import { deductibleExpenseVat, expenseCents, expenseTaxError, expenseTaxOptions, expenseTaxPreview, isRestaurant, prepareExpenseTaxLines, type ExpenseTaxRule } from "./lib/expense-tax";
+
 type EntryType = "income" | "expense";
 type EntryStatus = "paid" | "open";
 type LoanInterestType = "manual" | "nominal" | "effective";
@@ -107,6 +110,11 @@ type InvoiceVatLine = {
 };
 
 type InvoiceDraft = {
+  expenseTaxRule?: ExpenseTaxRule;
+  inputVatBlocked?: boolean;
+  nonDeductibleAmount?: string;
+  nonDeductibleNote?: string;
+  receiptGross?: string;
   salesVat?: SalesVatDraft;
   vatDate?: string;
   id: string;
@@ -370,6 +378,8 @@ const starterData: Administration[] = [
 ];
 
 const emptyEntry = {
+  expenseTaxRule: "standard" as ExpenseTaxRule,
+  inputVatBlocked: false,
   salesVat: { ...emptySalesVat },
   vatDate: "",
   date: today,
@@ -650,6 +660,17 @@ function getValidInvoiceVatLines(draft: InvoiceDraft) {
     );
 }
 
+function invoiceExpenseTax(draft: InvoiceDraft, deductionPercent: number) {
+  const split = draft.vatLines.length > 1;
+  const base = split ? calculateInvoiceVatLineTotal(draft.vatLines) : parseAmountInput(draft.amount) ?? 0;
+  const gross = draft.receiptGross ?? calculateInclusiveAmountInput(draft.amount, draft.vatRate);
+  const vat = split ? draft.vatLines.reduce((sum, line) => sum + expenseCents((parseAmountInput(line.amount) ?? 0) * Number(line.vatRate) / 100), 0) : expenseCents((parseAmountInput(gross) ?? base * (1 + Number(draft.vatRate) / 100)) - base);
+  const rule = draft.expenseTaxRule ?? "standard";
+  const manual = draft.nonDeductibleAmount?.trim() ? parseAmountInput(draft.nonDeductibleAmount) ?? NaN : 0;
+  const preview = expenseTaxPreview(base, vat, rule, draft.inputVatBlocked, manual, deductionPercent);
+  return { base, vat, gross, rule, error: expenseTaxError(rule, base, draft.nonDeductibleNote ?? "", manual, preview.cost) };
+}
+
 function calculateInvoiceVatLineTotal(lines: InvoiceVatLine[]) {
   return lines.reduce((total, line) => {
     const amount = parseAmountInput(line.amount);
@@ -699,6 +720,8 @@ function formatEntryProcessing(entry: Entry) {
       parts.push(`${entry.loanInterestType === "effective" ? "effectief" : "nominaal"} ${entry.loanAnnualRate}%`);
     }
   }
+  if (entry.expenseTaxRule && entry.expenseTaxRule !== "standard") parts.push(expenseTaxOptions.find(([key]) => key === entry.expenseTaxRule)?.[1] || "Fiscale kostencorrectie");
+  if (entry.inputVatBlocked || isRestaurant(entry.expenseTaxRule)) parts.push("Btw volledig niet aftrekbaar");
   if (entry.nonDeductibleAmount) {
     parts.push(`Fiscaal bijtellen ${money.format(entry.nonDeductibleAmount)}`);
   }
@@ -1112,11 +1135,10 @@ function calculateVatDeductionPercent(settings: VatDeductionSettings) {
 }
 
 function calculateTotals(entries: Entry[], vatDeductionPercent = 100, vatPeriodEntries: Entry[] = entries) {
-  const inputVatDeductionFactor = clampPercent(vatDeductionPercent) / 100;
   const vatSummary = vatEntries(vatPeriodEntries).reduce((acc, entry) => {
     const vat = dutchVat(entry);
     if (entry.type === "income") acc.vatToPay += vat;
-    else { acc.inputVatTotal += vat; acc.vatToClaim += vat * inputVatDeductionFactor; }
+    else { acc.inputVatTotal += vat; acc.vatToClaim += deductibleExpenseVat({ ...entry, salesVat: undefined }, Number(vatDeductionPercent)); }
     return acc;
   }, { vatToPay: 0, inputVatTotal: 0, vatToClaim: 0 });
   return operatingEntries(entries).reduce(
@@ -1126,7 +1148,7 @@ function calculateTotals(entries: Entry[], vatDeductionPercent = 100, vatPeriodE
       const total = getEntryTotalInclVat(entry);
       const profitLossAmount = getEntryProfitLossAmount(entry);
       const deductibleInputVat =
-        entry.type === "expense" ? vat * inputVatDeductionFactor : 0;
+        entry.type === "expense" ? deductibleExpenseVat({ ...entry, salesVat: undefined }, Number(vatDeductionPercent)) : 0;
       const nonDeductibleVat =
         entry.type === "expense" ? vat - deductibleInputVat : 0;
       const annualDepreciation =
@@ -1265,7 +1287,6 @@ function buildProfitLossStatement(entries: Entry[], vatDeductionPercent = 100) {
 }
 
 function buildVatOverview(entries: Entry[], vatDeductionPercent = 100) {
-  const inputVatDeductionFactor = clampPercent(vatDeductionPercent) / 100;
 
   const sortByRate = (a: { vatRate: number }, b: { vatRate: number }) => b.vatRate - a.vatRate;
   const groupByVatRate = (
@@ -1297,11 +1318,11 @@ function buildVatOverview(entries: Entry[], vatDeductionPercent = 100) {
     vat: dutchVat(entry),
   }));
   const inputVatLines = groupByVatRate("expense", (entry) => {
-    const vat = entry.amount * (entry.vatRate / 100);
+    const vat = getEntryVatAmount(entry);
     return {
       basis: entry.amount,
       vat,
-      deductibleVat: vat * inputVatDeductionFactor,
+      deductibleVat: deductibleExpenseVat({ ...entry, salesVat: undefined }, Number(vatDeductionPercent)),
     };
   });
   const salesBasisTotal = salesLines.reduce((total, line) => total + line.basis, 0);
@@ -1342,7 +1363,6 @@ function getMonthLabel(monthKey: string) {
 }
 
 function buildMonthlySpendableOverview(entries: Entry[], fiscalYear: number, vatDeductionPercent = 100) {
-  const inputVatDeductionFactor = clampPercent(vatDeductionPercent) / 100;
   const months = Array.from({ length: 12 }, (_, index) => {
     const monthKey = `${fiscalYear}-${String(index + 1).padStart(2, "0")}`;
     return {
@@ -1380,7 +1400,7 @@ function buildMonthlySpendableOverview(entries: Entry[], fiscalYear: number, vat
       paidMonth.vatReserve += vat;
     } else {
       paidMonth.paidExpensesInclVat += totalInclVat;
-      paidMonth.vatReserve -= vat * inputVatDeductionFactor;
+      paidMonth.vatReserve -= deductibleExpenseVat({ ...entry, salesVat: undefined }, Number(vatDeductionPercent));
     }
   });
 
@@ -2188,7 +2208,7 @@ function buildVatOverviewPdf(admin: Administration, overview: VatOverview, perio
       title: "Inkoopfacturen uit eerdere kwartalen",
       headers: ["Factuur", "Factuurdatum", "Btw-datum", "Voorbelasting"],
       widths: [181, 100, 100, 130],
-      rows: overview.deferredEntries.map((entry) => [entry.invoiceNumber || entry.description, entry.date, getVatDate(entry), money.format(getEntryVatAmount(entry) * overview.vatDeductionPercent / 100)]),
+      rows: overview.deferredEntries.map((entry) => [entry.invoiceNumber || entry.description, entry.date, getVatDate(entry), money.format(deductibleExpenseVat({ ...entry, salesVat: undefined }, Number(overview.vatDeductionPercent)))]),
       emptyText: "Geen doorgeschoven inkoopfacturen in dit tijdvak.",
     },
     {
@@ -2599,8 +2619,11 @@ export default function Home() {
     parseAmountInput(entryForm.loanAnnualRate) ?? 0,
     entryForm.loanInterestType,
   );
-  const nonDeductibleAmount = parseAmountInput(entryForm.nonDeductibleAmount) ?? 0;
-  const showNonDeductibleTool = entryForm.type === "expense" && !entryUsesSplitVatLines;
+  const entryTaxBase = enteredAmount ?? 0;
+  const entryTaxVat = entryUsesSplitVatLines
+    ? entryForm.vatLines.reduce((sum, line) => sum + expenseCents((parseAmountInput(line.amount) ?? 0) * Number(line.vatRate) / 100), 0)
+    : expenseCents((parseAmountInput(entryForm.amountInclVat) ?? entryTaxBase * (1 + Number(entryForm.vatRate) / 100)) - entryTaxBase);
+  const showNonDeductibleTool = entryForm.type === "expense";
   const canDepreciate =
     showDepreciation &&
     (entryUsesSplitVatLines
@@ -2643,6 +2666,7 @@ export default function Home() {
   const bookableInvoiceDrafts = selectedInvoiceDrafts.filter((draft) => {
     const amount = parseAmountInput(draft.amount);
     const validVatLines = getValidInvoiceVatLines(draft);
+    if (draft.type === "expense" && invoiceExpenseTax(draft, Number(vatDeductionPercent)).error) return false;
     if (draft.type === "income" && salesVatError(salesVatDetails(draft.salesVat), amount ?? 0, Number(draft.vatRate))) return false;
     if (vatDateError(draft.type, draft.date, resolveVatDate(draft.type, draft.date, draft.vatDate, active.fiscalYear, period))) return false;
     if (draft.type === "income" && validVatLines.some((line) => salesVatError(draft.salesVat ? { ...salesVatDetails(draft.salesVat)!, foreignVatAmount: 0 } : undefined, line.parsedAmount, line.parsedVatRate))) return false;
@@ -2803,6 +2827,25 @@ export default function Home() {
     setEntryForm(nextForm);
   };
 
+  const setReceiptAmount = (gross: string, rate = entryForm.vatRate) => {
+    const amount = calculateExclusiveAmountInput(gross, rate);
+    setEntryForm({ ...entryForm, amount, amountInclVat: gross, vatRate: rate,
+      vatLines: entryForm.vatLines.length === 1 ? [{ ...entryForm.vatLines[0], amount, vatRate: rate }] : entryForm.vatLines });
+  };
+  const setExpenseTaxRule = (rule: ExpenseTaxRule) => {
+    const restaurant = isRestaurant(rule);
+    const rate = restaurant && !isRestaurant(entryForm.expenseTaxRule) && !entryUsesSplitVatLines ? "9" : entryForm.vatRate;
+    const gross = entryForm.amountInclVat || calculateInclusiveAmountInput(entryForm.amount, entryForm.vatRate);
+    const amount = restaurant && !entryUsesSplitVatLines ? calculateExclusiveAmountInput(gross, rate) : entryForm.amount;
+    setEntryForm({ ...entryForm, expenseTaxRule: rule, inputVatBlocked: restaurant,
+      nonDeductibleAmount: rule === "manual" ? entryForm.nonDeductibleAmount : "",
+      nonDeductibleNote: rule === "standard" ? "" : entryForm.nonDeductibleNote,
+      amount, amountInclVat: gross, vatRate: rate,
+      category: restaurant ? "Representatiekosten" : entryForm.category,
+      vatLines: entryForm.vatLines.map((line) => ({ ...line, category: restaurant ? "Representatiekosten" : line.category,
+        amount: entryForm.vatLines.length === 1 ? amount : line.amount, vatRate: entryForm.vatLines.length === 1 ? rate : line.vatRate })) });
+  };
+
   const addEntry = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (duplicateSalesInvoiceNumber) return;
@@ -2838,11 +2881,16 @@ export default function Home() {
       return;
     }
 
+    if (entryForm.type === "expense") {
+      const preview = expenseTaxPreview(Number(entryTaxBase), Number(entryTaxVat), String(entryForm.expenseTaxRule) as ExpenseTaxRule, Boolean(entryForm.inputVatBlocked), Number(parseAmountInput(entryForm.nonDeductibleAmount) ?? 0), Number(vatDeductionPercent));
+      const error = expenseTaxError(String(entryForm.expenseTaxRule) as ExpenseTaxRule, Number(entryTaxBase), String(entryForm.nonDeductibleNote), Number(entryForm.nonDeductibleAmount.trim() ? parseAmountInput(entryForm.nonDeductibleAmount) ?? NaN : 0), Number(preview.cost));
+      if (error) { setEntryVatError(error); return; }
+    }
     const category =
       entryForm.category.trim() || entryCategories[entryForm.type][0] || "Algemeen";
 
     if (entryUsesSplitVatLines && !editingEntryId) {
-      const entries: Entry[] = validVatLines.map((line) => {
+      const rawEntries: Entry[] = validVatLines.map((line) => {
         const lineCategory = line.category || category;
         const lineDepreciationYears =
           lineCategory === "Investeringen" &&
@@ -2871,6 +2919,8 @@ export default function Home() {
         };
       });
 
+      const taxLines = prepareExpenseTaxLines(rawEntries.map((line) => ({ type: "expense" as const, date: "", amount: Number(line.amount), vatRate: Number(line.vatRate) })), entryForm.expenseTaxRule, entryForm.nonDeductibleNote, entryForm.inputVatBlocked, parseAmountInput(entryForm.nonDeductibleAmount) ?? 0, Number(vatDeductionPercent));
+      const entries: Entry[] = rawEntries.map((line, index) => ({ ...line, ...taxLines[index], date: line.date }));
       const correctionError = deferredVatError(active.entries, entries, vatDeductionPercent);
       if (correctionError) { setEntryVatError(correctionError); return; }
       updateActive({
@@ -2920,7 +2970,7 @@ export default function Home() {
     const nonDeductibleNote =
       entryForm.type === "expense" ? entryForm.nonDeductibleNote.trim() : "";
 
-    const entry: Entry = {
+    const rawEntry: Entry = {
       id: editingEntryId ?? uid(),
       rcDga: entryForm.type === "expense" && entryForm.paymentMethod === "dga" ? entryForm.rcDga.trim() : undefined,
       wkrType: entryForm.type === "expense" && entryForm.wkrType !== "none" ? entryForm.wkrType as "free" | "exempt" | "nil" : undefined,
@@ -2954,6 +3004,8 @@ export default function Home() {
         : undefined,
     };
 
+    const taxFields = rawEntry.type === "expense" ? prepareExpenseTaxLines([{ type: "expense" as const, date: entryForm.date, amount, vatRate: Number(entryForm.vatRate) }], entryForm.expenseTaxRule, entryForm.nonDeductibleNote, entryForm.inputVatBlocked, parseAmountInput(entryForm.nonDeductibleAmount) ?? 0, Number(vatDeductionPercent), parseAmountInput(entryForm.amountInclVat) ?? undefined)[0] : {};
+    const entry: Entry = { ...rawEntry, ...taxFields };
     const correctionError = deferredVatError(active.entries.filter((item) => item.id !== editingEntryId), [entry], vatDeductionPercent);
     if (correctionError) { setEntryVatError(correctionError); return; }
     updateActive({
@@ -3128,6 +3180,28 @@ export default function Home() {
         if (field === "vatRate" && next.vatLines.length === 1) {
           next.vatLines = [{ ...next.vatLines[0], vatRate: String(value) }];
         }
+        if (field === "amount") next.receiptGross = undefined;
+        if (field === "expenseTaxRule") {
+          const rule = value as ExpenseTaxRule;
+          const restaurant = isRestaurant(rule);
+          next.inputVatBlocked = restaurant;
+          if (rule !== "manual") next.nonDeductibleAmount = "";
+          if (rule === "standard") next.nonDeductibleNote = "";
+          if (restaurant) {
+            next.category = "Representatiekosten";
+            if (next.vatLines.length === 1) {
+              next.receiptGross = draft.receiptGross ?? calculateInclusiveAmountInput(draft.amount, draft.vatRate);
+              next.vatRate = isRestaurant(draft.expenseTaxRule) ? draft.vatRate : "9";
+              next.amount = calculateExclusiveAmountInput(next.receiptGross, next.vatRate);
+            }
+            next.vatLines = next.vatLines.map((line) => ({ ...line, category: "Representatiekosten", amount: next.vatLines.length === 1 ? next.amount : line.amount, vatRate: next.vatLines.length === 1 ? next.vatRate : line.vatRate }));
+          }
+        }
+        if (field === "receiptGross" || field === "vatRate" && isRestaurant(next.expenseTaxRule) && next.vatLines.length === 1) {
+          next.receiptGross = field === "receiptGross" ? String(value) : draft.receiptGross ?? calculateInclusiveAmountInput(draft.amount, draft.vatRate);
+          next.amount = calculateExclusiveAmountInput(next.receiptGross, next.vatRate);
+          next.vatLines = [{ ...next.vatLines[0], amount: next.amount, vatRate: next.vatRate }];
+        }
         return next;
       }),
     );
@@ -3219,6 +3293,7 @@ export default function Home() {
           ? getValidInvoiceVatLines(draft)
           : [];
 
+      const invoiceEntries: Entry[] = (() => {
       if (splitLines.length) {
         const foreignVatLines = allocateForeignVat(salesVat?.foreignVatAmount ?? 0, splitLines.map((line) => line.parsedAmount));
         return splitLines.map((line, index) => {
@@ -3259,6 +3334,8 @@ export default function Home() {
           paidDate: draft.status === "paid" ? draft.paidDate || draft.date || today : undefined,
         },
       ];
+      })();
+      return draft.type === "expense" ? prepareExpenseTaxLines(invoiceEntries, draft.expenseTaxRule ?? "standard", draft.nonDeductibleNote ?? "", draft.inputVatBlocked, parseAmountInput(draft.nonDeductibleAmount ?? "") ?? 0, Number(vatDeductionPercent), !splitLines.length ? parseAmountInput(invoiceExpenseTax(draft, Number(vatDeductionPercent)).gross) ?? undefined : undefined) : invoiceEntries;
     });
 
     const correctionError = deferredVatError(active.entries, entries, vatDeductionPercent);
@@ -3636,6 +3713,8 @@ export default function Home() {
         typeof entry.loanBalanceBeforePayment === "number"
           ? String(entry.loanBalanceBeforePayment).replace(".", ",")
           : "",
+      expenseTaxRule: entry.expenseTaxRule ?? (entry.nonDeductibleAmount || entry.nonDeductibleNote || entry.inputVatBlocked ? "manual" : "standard"),
+      inputVatBlocked: entry.inputVatBlocked ?? false,
       nonDeductibleAmount:
         typeof entry.nonDeductibleAmount === "number"
           ? String(entry.nonDeductibleAmount).replace(".", ",")
@@ -4501,62 +4580,10 @@ export default function Home() {
                       ) : null}
                     </div>
                   ) : null}
-                  {showNonDeductibleTool ? (
-                    <div className="entry-vat-lines">
-                      <div className="section-title">
-                        <div>
-                          <p className="eyebrow">Fiscaal</p>
-                          <h4>Niet-aftrekbare kosten</h4>
-                        </div>
-                        <label className="mini-toggle">
-                          <input
-                            checked={Boolean(entryForm.nonDeductibleAmount || entryForm.nonDeductibleNote)}
-                            onChange={(event) =>
-                              setEntryForm({
-                                ...entryForm,
-                                nonDeductibleAmount: event.target.checked ? entryForm.amount : "",
-                                nonDeductibleNote: event.target.checked ? entryForm.nonDeductibleNote : "",
-                              })
-                            }
-                            type="checkbox"
-                          />
-                          <span>Toepassen</span>
-                        </label>
-                      </div>
-                      <div className="mt-3 grid gap-3 md:grid-cols-[0.45fr_1fr]">
-                        <Field label="Fiscaal bij te tellen bedrag">
-                          <input
-                            className="input"
-                            inputMode="decimal"
-                            placeholder="Bijv. 120,00"
-                            value={entryForm.nonDeductibleAmount}
-                            onChange={(event) =>
-                              setEntryForm({
-                                ...entryForm,
-                                nonDeductibleAmount: event.target.value,
-                              })
-                            }
-                          />
-                        </Field>
-                        <Field label="Toelichting">
-                          <input
-                            className="input"
-                            placeholder="Bijv. privédeel, boete of beperkt aftrekbaar"
-                            value={entryForm.nonDeductibleNote}
-                            onChange={(event) =>
-                              setEntryForm({
-                                ...entryForm,
-                                nonDeductibleNote: event.target.value,
-                              })
-                            }
-                          />
-                        </Field>
-                      </div>
-                      <p className="mt-3 text-sm font-semibold text-[var(--muted)]">
-                        Fiscale bijtelling voor deze boeking: {money.format(nonDeductibleAmount)}
-                      </p>
-                    </div>
-                  ) : null}
+                  {showNonDeductibleTool && <ExpenseTaxTool rule={entryForm.expenseTaxRule} blocked={entryForm.inputVatBlocked} manual={entryForm.nonDeductibleAmount} note={entryForm.nonDeductibleNote}
+                    gross={entryForm.amountInclVat} vatRate={entryForm.vatRate} base={entryTaxBase} vat={entryTaxVat} deductionPercent={vatDeductionPercent} split={entryUsesSplitVatLines}
+                    onRule={setExpenseTaxRule} onGross={(gross) => setReceiptAmount(gross)} onRate={(rate) => setReceiptAmount(entryForm.amountInclVat || calculateInclusiveAmountInput(entryForm.amount, entryForm.vatRate), rate)}
+                    onBlocked={(inputVatBlocked) => setEntryForm({ ...entryForm, inputVatBlocked })} onManual={(nonDeductibleAmount) => setEntryForm({ ...entryForm, nonDeductibleAmount })} onNote={(nonDeductibleNote) => setEntryForm({ ...entryForm, nonDeductibleNote })} />}
                   {showDepreciation && (
                     <Field label="Afschrijving">
                       <select
@@ -4613,6 +4640,7 @@ export default function Home() {
 
           {tab === "invoices" && (
             <InvoiceImportPanel
+              vatDeductionPercent={vatDeductionPercent}
               fiscalYear={active.fiscalYear}
               period={period}
               bookableCount={bookableInvoiceDrafts.length}
@@ -5286,7 +5314,7 @@ export default function Home() {
                 </div>
                 <p className="mt-4 text-sm leading-6 text-[var(--muted)]">Btw volgt de btw-datum; kosten volgen de factuurdatum. Kies bovenaan het kwartaal waarvoor je aangifte voorbereidt. De gekozen btw-datum wordt bij het boeken vastgelegd. Bestaande boekingen worden niet automatisch verschoven.</p>
                 <InternationalVatReport data={vatOverview.international} />
-                {vatOverview.deferredEntries.length > 0 && <div className="mt-4 text-sm"><strong>Inkoopfacturen uit eerdere kwartalen</strong><ul className="mt-2 grid gap-1">{vatOverview.deferredEntries.map((entry) => <li key={entry.id}>{entry.invoiceNumber || entry.description}: factuur {entry.date} → btw {getVatDate(entry)} · {money.format(getEntryVatAmount(entry) * vatDeductionPercent / 100)}</li>)}</ul></div>}
+                {vatOverview.deferredEntries.length > 0 && <div className="mt-4 text-sm"><strong>Inkoopfacturen uit eerdere kwartalen</strong><ul className="mt-2 grid gap-1">{vatOverview.deferredEntries.map((entry) => <li key={entry.id}>{entry.invoiceNumber || entry.description}: factuur {entry.date} → btw {getVatDate(entry)} · {money.format(deductibleExpenseVat({ ...entry }, Number(vatDeductionPercent)))}</li>)}</ul></div>}
                 <p className="mt-4 text-sm leading-6 text-[var(--muted)]">
                   {summary.depreciationCount
                     ? `${summary.depreciationCount} investering(en) worden verdeeld over 5 of 10 jaar.`
@@ -6051,6 +6079,7 @@ function EntryTable({
 }
 
 function InvoiceImportPanel({
+  vatDeductionPercent,
   fiscalYear,
   period,
   bookableCount,
@@ -6068,6 +6097,7 @@ function InvoiceImportPanel({
   onUpdateVatLine,
   selectedCount,
 }: {
+  vatDeductionPercent: number;
   fiscalYear: number;
   period: PeriodKey;
   bookableCount: number;
@@ -6161,7 +6191,9 @@ function InvoiceImportPanel({
           const splitTotal = calculateInvoiceVatLineTotal(draft.vatLines);
           const usesSplitLines = draft.vatLines.length > 1;
           const treatmentError = draft.type === "income" ? salesVatError(salesVatDetails(draft.salesVat), amount ?? 0, Number(draft.vatRate)) || validVatLines.map((line) => salesVatError(draft.salesVat ? { ...salesVatDetails(draft.salesVat)!, foreignVatAmount: 0 } : undefined, line.parsedAmount, line.parsedVatRate)).find(Boolean) : "";
-          const isBookable = !treatmentError && !vatDateError(draft.type, draft.date, resolveVatDate(draft.type, draft.date, draft.vatDate, fiscalYear, period)) && (usesSplitLines
+          const expenseTax = invoiceExpenseTax(draft, Number(vatDeductionPercent));
+          const expenseError = draft.type === "expense" ? expenseTax.error : "";
+          const isBookable = !expenseError && !treatmentError && !vatDateError(draft.type, draft.date, resolveVatDate(draft.type, draft.date, draft.vatDate, fiscalYear, period)) && (usesSplitLines
             ? draft.description.trim() && validVatLines.length === draft.vatLines.length
             : draft.description.trim() && isValidBookingAmount(amount));
 
@@ -6288,6 +6320,11 @@ function InvoiceImportPanel({
                 </Field>
               </div>
 
+              {draft.type === "expense" && <ExpenseTaxTool rule={expenseTax.rule} blocked={draft.inputVatBlocked ?? false} manual={draft.nonDeductibleAmount ?? ""} note={draft.nonDeductibleNote ?? ""}
+                gross={expenseTax.gross} vatRate={draft.vatRate} base={expenseTax.base} vat={expenseTax.vat} deductionPercent={vatDeductionPercent} split={usesSplitLines}
+                onRule={(value) => onUpdate(draft.id, "expenseTaxRule", value)} onGross={(value) => onUpdate(draft.id, "receiptGross", value)} onRate={(value) => onUpdate(draft.id, "vatRate", value)}
+                onBlocked={(value) => onUpdate(draft.id, "inputVatBlocked", value)} onManual={(value) => onUpdate(draft.id, "nonDeductibleAmount", value)} onNote={(value) => onUpdate(draft.id, "nonDeductibleNote", value)} />}
+              {expenseError && <p role="alert" className="text-sm text-red-700">{expenseError}</p>}
               {draft.vatLines.length > 1 || draft.type === "expense" ? (
                 <div className="invoice-vat-lines">
                   <div className="section-title">

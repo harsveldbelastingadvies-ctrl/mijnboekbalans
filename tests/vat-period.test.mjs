@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
 import { filterVatPeriod, filterVatMonth, getVatDate, isDeferredVat, resolveVatDate, suggestedVatDate, vatDateError, deferredVatError } from "../app/lib/vat-period.ts";
+import { deductibleExpenseVat } from "../app/lib/expense-tax.ts";
 import { invoicedVat, dutchVat, buildInternationalVat, usesDutchSalesVat } from "../app/lib/international-vat.ts";
 import { companyCashAmount, operatingEntries, vatEntries } from "../app/lib/payroll-accounting.ts";
 const entry = (extra = {}) => ({ id: "e", date: "2026-02-15", type: "expense", amount: 100, vatRate: 21, description: "Inkoop", relation: "Leverancier", category: "Kantoorkosten", status: "open", ...extra });
@@ -13,7 +14,7 @@ const source = ts.createSourceFile("page.tsx", readFileSync(new URL("../app/page
 const names = ["calculateTotals", "getEntryVatAmount", "getEntryTotalInclVat", "getEntryProfitLossAmount", "getEntryQuarter", "filterEntriesByPeriod", "getQuarterSummaries", "buildVatOverview", "buildMonthlyFinancialOverview", "buildMonthlySpendableOverview", "getMonthKeyFromDate", "getMonthLabel"];
 const declarations = source.statements.filter((node) => ts.isFunctionDeclaration(node) && names.includes(node.name?.text)).map((node) => node.getText(source)).join("\n");
 const context = vm.createContext({ operatingEntries, vatEntries, filterVatPeriod, filterVatMonth, getVatDate, isDeferredVat,
-  companyCashAmount, invoicedVat, dutchVat, buildInternationalVat, usesDutchSalesVat, clampPercent: (n) => Math.max(0, Math.min(100, n)), loanCategory: "Financiering" });
+  companyCashAmount, deductibleExpenseVat, invoicedVat, dutchVat, buildInternationalVat, usesDutchSalesVat, clampPercent: (n) => Math.max(0, Math.min(100, n)), loanCategory: "Financiering" });
 vm.runInContext(ts.transpile(declarations, { target: ts.ScriptTarget.ES2020 }), context);
 
 test("Q1 invoice claimed in Q3 once; costs and open balance remain in Q1", () => {
@@ -95,4 +96,23 @@ test("international sales use separate Dutch VAT totals and service dates throug
   const months = context.buildMonthlyFinancialOverview(entries, 2026);
   assert.equal(months[8].vatBalance, 42);
   assert.equal(months[9].vatBalance, 0);
+});
+
+test("restaurant costs, fiscal add-back, open balance and VAT PDF overview reconcile in actual page code", () => {
+  const restaurant = entry({ date: "2026-09-15", amount: 56.19, vatRate: 9, inputVatAmount: 5.06, inputVatBlocked: true, expenseTaxRule: "restaurant_ib", nonDeductibleAmount: 12.25 });
+  const totals = context.calculateTotals([restaurant]);
+  assert.equal(totals.costs, 61.25);
+  assert.equal(totals.nonDeductibleCosts, 12.25);
+  assert.equal(totals.vatToClaim, 0);
+  assert.equal(totals.open, 61.25);
+  assert.equal(-totals.costs + totals.nonDeductibleCosts, -49);
+  const overview = context.buildVatOverview([restaurant]);
+  assert.equal(overview.inputVatTotal, 5.06);
+  assert.equal(overview.deductibleInputVatTotal, 0);
+  assert.equal(overview.nonDeductibleInputVatTotal, 5.06);
+  const paid = { ...restaurant, status: "paid" };
+  const months = context.buildMonthlyFinancialOverview([paid], 2026);
+  assert.equal(months[8].paidExpensesInclVat, 61.25);
+  assert.equal(months[8].vatBalance, 0);
+  assert.equal(months[8].vatReserve, 0);
 });

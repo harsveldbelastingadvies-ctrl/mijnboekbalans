@@ -273,3 +273,47 @@ Bronnen: [EU-diensten](https://www.belastingdienst.nl/wps/wcm/connect/bldcontent
 [goederen buiten EU](https://www.belastingdienst.nl/wps/wcm/connect/bldcontentnl/belastingdienst/zakelijk/btw/zakendoen_met_het_buitenland/zakendoen_buiten_de_eu/aangifte_doen_als_u_zakendoet_buiten_de_eu/aangifte_en_als_u_goederen_uitvoert_naar_niet_eu_landen),
 [diensten buiten EU](https://www.belastingdienst.nl/wps/wcm/connect/bldcontentnl/belastingdienst/zakelijk/btw/zakendoen_met_het_buitenland/zakendoen_buiten_de_eu/aangifte_doen_als_u_zakendoet_buiten_de_eu/aangifte_doen_als_u_diensten_levert_aan_afnemers_in_niet_eu_landen),
 [EU-afstandsverkopen](https://www.belastingdienst.nl/wps/wcm/connect/nl/btw/content/btw-goederen-eu-particulieren).
+
+## Eenvoudige fiscale kostenaftrek / restaurantbonnen
+
+Bij handmatige uitgaven en geïmporteerde inkoopfacturen staat **Fiscale
+kostenaftrek**. Kies de zakelijke restaurantmaaltijd voor IB (80% aftrek) of
+VPB (73,5% aftrek), vul het bonbedrag inclusief btw en het zakelijke doel in.
+De keuze stelt Representatiekosten en 9% op de bon voor; controleer het werkelijke
+btw-percentage en kies waar nodig 21%, of splits een gemengde bon per tarief.
+Dit is bedoeld voor zakelijke maaltijden van de ondernemer of met relaties die
+ter plaatse in de horeca worden genuttigd. Privémaaltijden zijn geen zakelijke
+kosten; personeelsvoorzieningen/loon en doorbelaste horecaprestaties moeten apart
+worden beoordeeld.
+
+Voorbeeld: een zakelijke restaurantbon van **EUR 61,25 inclusief 9% btw** wordt
+vastgelegd als EUR 56,19 exclusief en EUR 5,06 btw. De aftrekbare voorbelasting is
+EUR 0. De totale EUR 61,25 blijft een kostenpost; met de IB-percentagekeuze wordt
+EUR 12,25 fiscaal bijgeteld en resteert EUR 49,00 aftrek. Met de VPB-keuze is de
+bijtelling EUR 16,23 en de aftrek EUR 45,02 (op centen afgerond).
+
+De btw-blokkade per boeking staat los van het algemene pro-rata-percentage van de
+administratie. Btw-overzicht/PDF en btw-reservering nemen de geblokkeerde btw niet
+in aftrek. Open posten, betaling, rekening-courant DGA en WKR-waardering behouden
+het juiste bruto bonbedrag. De daadwerkelijke btw op de bon wordt op centen
+vastgelegd; bij een splitsing wordt de fiscale correctie één keer over het totale
+kostenbedrag berekend en met een afrondingsrest over de regels verdeeld.
+Creditnota's keren bruto, btw en fiscale bijtelling om. Het fiscale resultaat
+neemt de bijtelling op, zonder de oorspronkelijke kosten of betaling te verlagen.
+
+De procentuele methode moet consistent worden toegepast voor de betreffende
+beperkt aftrekbare kosten van het jaar. Dit is geen vrije keuze van een gunstiger
+percentage per bon. De alternatieve jaardrempel (bij VPB mede afhankelijk van de
+loonsom) wordt niet automatisch berekend; beoordeel die methode afzonderlijk en
+verwerk een eventuele jaarcorrectie handmatig. De restaurantkeuze dekt niet
+stilzwijgend alle uitzonderingen op de aftrekbeperking.
+
+**Andere kosten: handmatig corrigeren** behoudt de mogelijkheid van een eigen
+fiscale bijtelling en biedt daarnaast een onafhankelijke btw-blokkade. De
+correctie mag niet groter zijn dan het kostenbedrag en moet hetzelfde teken
+hebben als de bon. **Geen extra fiscale correctie** wist de extra bijtelling en
+btw-blokkade. Bestaande boekingen worden niet automatisch gewijzigd; bestaande
+handmatige correcties blijven bij het openen beschikbaar.
+
+Bronnen: [Belastingdienst horeca-btw](https://www.belastingdienst.nl/wps/wcm/connect/bldcontentnl/belastingdienst/zakelijk/btw/btw_aftrekken/welke_btw_is_aftrekbaar/bijzondere_situaties/uitgaven_in_de_horeca),
+[beperkt aftrekbare kosten 2026](https://www.belastingdienst.nl/wps/wcm/connect/bldcontentnl/belastingdienst/zakelijk/winst/inkomstenbelasting/veranderingen-inkomstenbelasting-2026/drempel-beperkt-aftrekbare-kosten-2026).

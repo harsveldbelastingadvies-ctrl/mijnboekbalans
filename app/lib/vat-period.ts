@@ -1,4 +1,8 @@
+import { deductibleExpenseVat } from "./expense-tax.ts";
 export type VatDatedEntry = {
+  inputVatBlocked?: boolean;
+  inputVatAmount?: number;
+  expenseTaxRule?: "standard" | "restaurant_ib" | "restaurant_vpb" | "manual";
   date: string;
   vatDate?: string;
   salesVat?: { treatment: string; serviceDate: string };
@@ -66,7 +70,7 @@ export function deferredVatError(existing: VatDatedEntry[], additions: VatDatedE
   for (const target of targets) {
     const amount = [...existing, ...additions].filter((entry) => isDeferredVat(entry) &&
       `${getVatDate(entry).slice(0, 4)}-q${quarter(getVatDate(entry))}` === target)
-      .reduce((sum, entry) => sum + entry.amount * entry.vatRate / 100 * deductionPercent / 100, 0);
+      .reduce((sum, entry) => sum + deductibleExpenseVat({ ...entry, salesVat: undefined }, deductionPercent), 0);
     if (Math.abs(Math.round(amount * 100)) > 100000)
       return `De doorgeschoven voorbelasting voor ${target} is samen meer dan € 1.000. Verwerk vergeten voorbelasting via een suppletie; kies daarvoor de oorspronkelijke factuurdatum als btw-datum.`;
   }

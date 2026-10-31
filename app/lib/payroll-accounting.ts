@@ -1,6 +1,7 @@
 import { invoicedVat, type SalesVatDetails } from "./international-vat.ts";
 import type { EmployeePayroll } from "./employee-payroll";
-export type AccountingEntryFields = {
+import type { ExpenseTaxFields } from "./expense-tax";
+export type AccountingEntryFields = ExpenseTaxFields & {
   salesVat?: SalesVatDetails;
   payrollSettlement?: "pension" | "deduction";
   payrollSettlementFund?: string;
@@ -95,7 +96,7 @@ export function syncDeclarationEntries(admin: FinanceAdministration, declaration
 }
 export function calculateWkr(entries: FinanceEntry[], year: number, settings: WkrSettings) {
   const selected = entries.filter((entry) => entry.type === "expense" && !entry.balanceOnly && Number(entry.date.slice(0, 4)) === year && entry.wkrType);
-  const value = (entry: FinanceEntry) => entry.wkrValue ?? cents(entry.amount * (1 + entry.vatRate / 100));
+  const value = (entry: FinanceEntry) => entry.wkrValue ?? cents(entry.amount + invoicedVat(entry));
   const used = cents(selected.filter((entry) => entry.wkrType === "free").reduce((total, entry) => total + value(entry), 0));
   const allowance = cents(Math.min(settings.fiscalWage, settings.threshold) * settings.lowerRate / 100 + Math.max(0, settings.fiscalWage - settings.threshold) * settings.upperRate / 100);
   const excess = cents(Math.max(0, used - allowance));
@@ -104,7 +105,7 @@ export function calculateWkr(entries: FinanceEntry[], year: number, settings: Wk
 export function rcEffect(entry: FinanceEntry) {
   if (!entry.rcDga?.trim()) return 0;
   if (entry.balanceOnly) return cents(entry.rcAmount ?? 0);
-  return entry.type === "expense" ? -cents(entry.amount * (1 + entry.vatRate / 100)) : 0;
+  return entry.type === "expense" ? -cents(entry.amount + invoicedVat(entry)) : 0;
 }
 export function rcLedger(entries: FinanceEntry[], dga: string, month: string) {
   const matching = entries.filter((entry) => entry.rcDga?.trim().toLowerCase() === dga.trim().toLowerCase())
