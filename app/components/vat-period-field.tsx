@@ -1,3 +1,5 @@
+import { formatDutchDate } from "../lib/dutch-date";
+import { DutchDateInput } from "./dutch-date-input";
 import { resolveVatDate, vatDateError, type VatPeriod } from "../lib/vat-period";
 
 export function VatPeriodField({ date, selection, year, period, onChange }: {
@@ -13,10 +15,10 @@ export function VatPeriodField({ date, selection, year, period, onChange }: {
       <option value="invoice">Oorspronkelijke factuurdatum</option>
       <option value="custom">Zelf een btw-datum kiezen</option>
     </select></label>
-    <label>Btw-datum<input className="input" type="date" required value={vatDate} min={date}
+    <label>Btw-datum<DutchDateInput className="input"  required value={vatDate} min={date}
       max={`${date.slice(0, 4)}-12-31`} aria-invalid={Boolean(error)} onChange={(event) => onChange(event.target.value)} /></label>
     <span className="text-xs font-normal text-[var(--muted)]">{error || (vatDate !== date
-      ? `Btw in kwartaal ${Math.ceil(Number(vatDate.slice(5, 7)) / 3)} (${vatDate.slice(0, 4)}). Factuur en kosten blijven op ${date}.`
+      ? `Btw in kwartaal ${Math.ceil(Number(vatDate.slice(5, 7)) / 3)} (${vatDate.slice(0, 4)}). Factuur en kosten blijven op ${formatDutchDate(date)}.`
       : "Btw en kosten volgen de factuurdatum.")}</span>
     <span className="text-xs font-normal text-[var(--muted)]">Het voorstel gebruikt het gekozen kwartaal bovenaan; bij een heel jaar blijft de factuurdatum gelden. Controleer of dit de eerstvolgende aangifte is. Vergeten voorbelasting: totale correctie maximaal € 1.000; daarboven suppletie. Tel ook andere correcties mee.</span>
   </div>;

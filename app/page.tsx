@@ -1,4 +1,6 @@
 "use client";
+import { formatDutchDate, formatDutchTimestamp } from "./lib/dutch-date";
+import { DutchDateInput } from "./components/dutch-date-input";
 
 import {
   ChangeEvent,
@@ -719,11 +721,11 @@ function formatEntryProcessing(entry: Entry) {
   if (entry.type === "income" && entry.salesVat) {
     parts.push(`${entry.salesVat.country} · ${salesVatOptions.find(([key]) => key === entry.salesVat?.treatment)?.[1] ?? entry.salesVat.treatment}`);
     if (entry.salesVat.customerVatId) parts.push(entry.salesVat.customerVatId);
-    if (entry.salesVat.serviceDate) parts.push(`Dienst geleverd ${entry.salesVat.serviceDate}`);
+    if (entry.salesVat.serviceDate) parts.push(`Dienst geleverd ${formatDutchDate(entry.salesVat.serviceDate)}`);
     if (isForeignVat(entry.salesVat.treatment)) parts.push(`Buitenlandse btw ${money.format(entry.salesVat.foreignVatAmount)}`);
     if (entry.salesVat.evidence) parts.push(entry.salesVat.evidence);
   }
-  if (getVatDate(entry) !== entry.date) parts.push(`Btw-datum ${getVatDate(entry)}`);
+  if (getVatDate(entry) !== entry.date) parts.push(`Btw-datum ${formatDutchDate(getVatDate(entry))}`);
   if (entry.balanceOnly) parts.push("Balanspost; geen omzet, kosten of btw");
   if (entry.rcDga) parts.push(`Rekening-courant ${entry.rcDga}`);
   if (entry.wkrType) parts.push(entry.wkrType === "free" ? "WKR vrije ruimte" : entry.wkrType === "exempt" ? "WKR gericht vrijgesteld" : "WKR nihilwaardering");
@@ -3961,7 +3963,7 @@ export default function Home() {
   };
   const downloadFilingSnapshot = (snapshot: FilingSnapshot) => downloadBlob(`${safeFileName(active.name)}-${snapshot.year}-${snapshot.period}-aangiftecontrole.pdf`, buildTablePdf({ ...active, fiscalYear: snapshot.year }, "Aangiftecontrole (geen indieningsbewijs)", `${snapshot.label} ${snapshot.year}`, [
     { title: "Bewaarde controlecijfers / ondersteunde rubrieken", headers: ["Rubriek", "Omschrijving", "Omzet", "Btw"], widths: [50, 221, 120, 120], rows: [...snapshot.rows.map((row) => [row.code, row.label, money.format(row.basis), money.format(row.vat)]), ["5b", "Aftrekbare voorbelasting", "", money.format(snapshot.inputVat)]] },
-    { title: "Aansluiting en saldo", headers: ["Onderdeel", "Bedrag"], widths: [340,171], rows: [["Saldo volgens ondersteunde rubrieken", money.format(snapshot.balance)], ["ICP totaal", money.format(snapshot.icpTotal)], ["Verschil met 3b", money.format(snapshot.icpDifference)], ["Cijfers vastgelegd op", new Date(snapshot.capturedAt).toLocaleString("nl-NL")]] }
+    { title: "Aansluiting en saldo", headers: ["Onderdeel", "Bedrag"], widths: [340,171], rows: [["Saldo volgens ondersteunde rubrieken", money.format(snapshot.balance)], ["ICP totaal", money.format(snapshot.icpTotal)], ["Verschil met 3b", money.format(snapshot.icpDifference)], ["Cijfers vastgelegd op", formatDutchTimestamp(snapshot.capturedAt)]] }
   ]));
 
   if (workspaceState !== "unlocked") {
@@ -4186,7 +4188,7 @@ export default function Home() {
                       </datalist>
                     </Field>
                     <Field label="Factuurdatum">
-                      <input className="input" type="date" value={entryForm.date} onChange={(event) => setEntryForm({ ...entryForm, date: event.target.value })} />
+                      <DutchDateInput className="input"  value={entryForm.date} onChange={(event) => setEntryForm({ ...entryForm, date: event.target.value })} />
                     </Field>
                     {entryForm.type === "expense" && <VatPeriodField date={entryForm.date} selection={entryForm.vatDate} year={active.fiscalYear} period={period} onChange={(vatDate) => { setEntryVatError(""); setEntryForm({ ...entryForm, vatDate }); }} />}
                     {entryVatError && <p role="alert" className="text-sm text-red-700">{entryVatError}</p>}
@@ -4321,9 +4323,9 @@ export default function Home() {
                     </Field>
                     {entryForm.status === "paid" ? (
                       <Field label="Betaaldatum">
-                        <input
+                        <DutchDateInput
                           className="input"
-                          type="date"
+
                           value={entryForm.paidDate}
                           onChange={(event) => setEntryForm({ ...entryForm, paidDate: event.target.value })}
                         />
@@ -4646,9 +4648,9 @@ export default function Home() {
                       />
                     </Field>
                     <Field label="Geboortedatum">
-                      <input
+                      <DutchDateInput
                         className="input"
-                        type="date"
+
                         value={payrollEmployeeForm.birthDate}
                         onChange={(event) =>
                           setPayrollEmployeeForm({ ...payrollEmployeeForm, birthDate: event.target.value })
@@ -4824,9 +4826,9 @@ export default function Home() {
                       />
                     </Field>
                     <Field label="Betaaldatum">
-                      <input
+                      <DutchDateInput
                         className="input"
-                        type="date"
+
                         value={salaryForm.paymentDate}
                         onChange={(event) => setSalaryForm({ ...salaryForm, paymentDate: event.target.value })}
                       />
@@ -4978,7 +4980,7 @@ export default function Home() {
                     <CheckRow
                       key={entry.id}
                       title={entry.description}
-                      meta={`${entry.date} · ${entry.relation} · ${money.format(getEntryTotalInclVat(entry))} incl. btw`}
+                      meta={`${formatDutchDate(entry.date)} · ${entry.relation} · ${money.format(getEntryTotalInclVat(entry))} incl. btw`}
                     >
                       <button className="soft-button" onClick={() => markEntryPaid(entry.id)}>
                         Markeer betaald
@@ -5049,7 +5051,7 @@ export default function Home() {
                     <CheckRow
                       key={entry.id}
                       title={entry.description}
-                      meta={`${entry.date} · ${entry.category} · ${money.format(entry.amount)} excl. btw`}
+                      meta={`${formatDutchDate(entry.date)} · ${entry.category} · ${money.format(entry.amount)} excl. btw`}
                     />
                   ))}
                 </CheckRows>
@@ -5067,14 +5069,14 @@ export default function Home() {
                     <CheckRow
                       key={`relation-${entry.id}`}
                       title="Relatie ontbreekt"
-                      meta={`${entry.date} · ${entry.description}`}
+                      meta={`${formatDutchDate(entry.date)} · ${entry.description}`}
                     />
                   ))}
                   {zeroVatEntries.map((entry) => (
                     <CheckRow
                       key={`vat-${entry.id}`}
                       title="Btw 0%"
-                      meta={`${entry.date} · ${entry.description} · controleer of dit klopt`}
+                      meta={`${formatDutchDate(entry.date)} · ${entry.description} · controleer of dit klopt`}
                     />
                   ))}
                 </CheckRows>
@@ -5265,7 +5267,7 @@ export default function Home() {
                 </div>
                 <p className="mt-4 text-sm leading-6 text-[var(--muted)]">Btw volgt de btw-datum; kosten volgen de factuurdatum. Kies bovenaan het kwartaal waarvoor je aangifte voorbereidt. De gekozen btw-datum wordt bij het boeken vastgelegd. Bestaande boekingen worden niet automatisch verschoven.</p>
                 <InternationalVatReport data={vatOverview.international} />
-                {vatOverview.deferredEntries.length > 0 && <div className="mt-4 text-sm"><strong>Inkoopfacturen uit eerdere kwartalen</strong><ul className="mt-2 grid gap-1">{vatOverview.deferredEntries.map((entry) => <li key={entry.id}>{entry.invoiceNumber || entry.description}: factuur {entry.date} → btw {getVatDate(entry)} · {money.format(deductibleExpenseVat({ ...entry }, Number(vatDeductionPercent)))}</li>)}</ul></div>}
+                {vatOverview.deferredEntries.length > 0 && <div className="mt-4 text-sm"><strong>Inkoopfacturen uit eerdere kwartalen</strong><ul className="mt-2 grid gap-1">{vatOverview.deferredEntries.map((entry) => <li key={entry.id}>{entry.invoiceNumber || entry.description}: factuur {formatDutchDate(entry.date)} → btw {formatDutchDate(getVatDate(entry))} · {money.format(deductibleExpenseVat({ ...entry }, Number(vatDeductionPercent)))}</li>)}</ul></div>}
                 <p className="mt-4 text-sm leading-6 text-[var(--muted)]">
                   {summary.depreciationCount
                     ? `${summary.depreciationCount} investering(en) worden verdeeld over 5 of 10 jaar.`
@@ -5927,7 +5929,7 @@ function CompactEntries({ entries }: { entries: Entry[] }) {
           <div>
             <strong className="block">{entry.relation}</strong>
             <span className="text-xs text-[var(--muted)]">
-              {entry.date} · {entry.invoiceNumber ? `Factuur ${entry.invoiceNumber} · ` : ""}{entry.description}
+              {formatDutchDate(entry.date)} · {entry.invoiceNumber ? `Factuur ${entry.invoiceNumber} · ` : ""}{entry.description}
             </span>
           </div>
           <span className={getEntryAmountClass(entry)}>{formatSignedEntryAmount(entry)}</span>
@@ -5986,7 +5988,7 @@ function EntryTable({
             {entries.map((entry) => (
               <tr className="border-b border-[var(--line)] last:border-b-0" key={entry.id}>
                 <td className="py-3 pr-3 font-semibold">{entry.relation}</td>
-                <td className="py-3 pr-3">{entry.date}</td>
+                <td className="py-3 pr-3">{formatDutchDate(entry.date)}</td>
                 <td className="py-3 pr-3">{entry.invoiceNumber || "-"}</td>
                 <td className="py-3 pr-3">
                   <strong className="block">{entry.description}</strong>
@@ -6187,9 +6189,9 @@ function InvoiceImportPanel({
                   />
                 </Field>
                 <Field label="Factuurdatum">
-                  <input
+                  <DutchDateInput
                     className="input"
-                    type="date"
+
                     value={draft.date}
                     onChange={(event) => onUpdate(draft.id, "date", event.target.value)}
                   />
@@ -6244,9 +6246,9 @@ function InvoiceImportPanel({
                 </Field>
                 {draft.status === "paid" ? (
                   <Field label="Betaaldatum">
-                    <input
+                    <DutchDateInput
                       className="input"
-                      type="date"
+
                       value={draft.paidDate}
                       onChange={(event) => onUpdate(draft.id, "paidDate", event.target.value)}
                     />
