@@ -1,10 +1,12 @@
+import { payslipFonts } from "./payslip-fonts.ts";
 type Section = { title: string; headers: string[]; rows: Array<Array<string | number>>; widths: number[] };
 type Employer = { name: string; fiscalYear: number };
 
 // Presentation only: render the supplied payroll snapshot without recalculation.
 export function buildModernPayslipPdf(admin: Employer, title: string, period: string, sections: Section[]) {
-  const ink = "0.08 0.16 0.20", muted = "0.31 0.39 0.42", teal = "0.03 0.36 0.34";
-  const safe = (v: string | number) => String(v).replace(/\bEUR(?=\s*[-+]?\d)/g, "€").replaceAll("\u00a0", " ").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\x20-\x7e€]/g, " ");
+  const ink = "0.10 0.15 0.24", muted = "0.39 0.44 0.52", teal = "0.19 0.37 0.93";
+  const employerCopy = /werkgeversoverzicht/i.test(title);
+  const safe = (v: string | number) => String(v).replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, "$3-$2-$1").replace(/\b(\d{4})-(\d{2})\b/g, "$2-$1").replace(/\bEUR(?=\s*[-+]?\d)/g, "€").replaceAll("\u00a0", " ").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\x20-\x7e€]/g, " ");
   // WinAnsi maps the euro glyph to byte 0x80. An octal PDF escape keeps streams
   // ASCII-safe, so UTF-8 Blob encoding does not alter glyph bytes or offsets.
   const escape = (v: string | number) => safe(v).replace(/[\\()]/g, "\\$&").replaceAll("€", "\\200");
@@ -12,17 +14,23 @@ export function buildModernPayslipPdf(admin: Employer, title: string, period: st
   const text = (v: string | number, x: number, at: number, size = 9, color = ink, bold = false) => commands.push(`${color} rg BT /${bold ? "F2" : "F1"} ${size} Tf ${x} ${at} Td (${escape(v)}) Tj ET`);
   const rect = (x: number, at: number, w: number, h: number, color: string) => commands.push(`${color} rg ${x} ${at} ${w} ${h} re f`);
   const line = (at: number) => commands.push(`0.84 0.89 0.88 RG 0.5 w 42 ${at} m 553 ${at} l S`);
-  // Conservative bounds leave space for wide Helvetica glyphs and long identifiers.
+  const measure = (value: string, size: number, bold = false) => [...value].reduce((sum,char)=>{
+    const code=char === "€" ? 128 : char.charCodeAt(0);
+    return sum+(payslipFonts[bold?1:0].widths[code-32] ?? 556);
+  },0)*size/1000;
   const wrap = (v: string | number, width: number, size = 9) => {
-    const max = Math.max(1, Math.floor(width / (size * 0.62))); const result: string[] = [];
-    let current = "";
-    for (const word of safe(v).split(/\s+/)) {
-      if (current && current.length + word.length + 1 > max) { result.push(current); current = ""; }
-      let rest = word;
-      while (rest.length > max) { result.push(rest.slice(0, max)); rest = rest.slice(max); }
-      current = current ? `${current} ${rest}` : rest;
+    const fits=(value:string)=>Math.max(measure(value,size),measure(value,size,true))<=width;
+    const result:string[]=[];let current="";
+    for(const word of safe(v).split(/\s+/)){
+      if(current && !fits(`${current} ${word}`)){result.push(current);current="";}
+      let rest=word;
+      while(!fits(rest)){
+        let count=1;while(count<rest.length && fits(rest.slice(0,count+1)))count++;
+        result.push(rest.slice(0,count));rest=rest.slice(count);
+      }
+      current=current?`${current} ${rest}`:rest;
     }
-    if (current || !result.length) result.push(current);
+    if(current || !result.length)result.push(current);
     return result;
   };
   const finish = () => {
@@ -34,8 +42,8 @@ export function buildModernPayslipPdf(admin: Employer, title: string, period: st
   const newPage = () => {
     finish(); page++;
     rect(42, 793, 24, 4, teal); text("BoekBalans", 76, 790, 12, teal, true);
-    text(/concept/i.test(title) ? "CONCEPT / LOONSTROOK" : "SALARISSPECIFICATIE", 42, 768, 8, muted, true);
-    text(title, 42, 744, 24, ink, true);
+    text(employerCopy ? (/concept/i.test(title) ? "CONCEPT / WERKGEVERSOVERZICHT" : "WERKGEVERSOVERZICHT") : /concept/i.test(title) ? "CONCEPT / LOONSTROOK" : "SALARISSPECIFICATIE", 42, 768, 8, muted, true);
+    text(employerCopy ? "Werkgeversoverzicht" : title.replace(/^CONCEPT /i, ""), 42, 744, 24, ink, true);
     const employerLines = wrap(`${admin.name} / ${period}`, 511, 10);
     employerLines.forEach((v, i) => text(v, 42, 724 - i * 13, 10, muted));
     y = 700 - (employerLines.length - 1) * 13;
@@ -81,6 +89,13 @@ export function buildModernPayslipPdf(admin: Employer, title: string, period: st
       "Vakantiegeldgrondslag / percentage":"Grondslag / percentage",
       "Opbouw vakantiegeld deze maand":"Opbouw deze maand",
       "Reserve vakantiegeld einde periode":"Reserve einde periode",
+      "Brutoloon cumulatief":"Brutoloon",
+      "Fiscaal loon cumulatief":"Fiscaal loon",
+      "SV-loon cumulatief":"SV-loon",
+      "Loonheffing cumulatief":"Loonheffing",
+      "Arbeidskorting cumulatief":"Arbeidskorting",
+      "Pensioen werknemer cumulatief":"Pensioen werknemer",
+      "Verloonde uren cumulatief":"Verloonde uren",
     } as Record<string,string>)[String(v)] ?? String(v);
     const shortValue = (v:string|number) => v === "Wit / maand / Nederland / standaard 2026" ? "Wit / maand / NL / standaard 2026" : v;
     const cell = (row: Array<string | number>, width: number): Cell => ({label:wrap(shortLabel(row[0]),width,7.2),value:wrap(shortValue(row[1]),width,8.5)});
@@ -94,10 +109,16 @@ export function buildModernPayslipPdf(admin: Employer, title: string, period: st
     const bodyOther = bodySections.filter(s=>s!==calculation && !/heffingen en pensioen|vakantiegeld/i.test(s.title) && s.rows.length);
     const details = bodySections.find(s=>/heffingen en pensioen/i.test(s.title));
     const holiday = bodySections.find(s=>/vakantiegeld/i.test(s.title));
-    const data = bodyOther.map(s=>({title:s.title,...grid(s.rows,3,511)}));
-    const holidayGrid = grid(holiday?.rows ?? [],2,293);
-    const cumulativeGrid = grid(cumulativeRows,4,487);
-    const amountWidth = (v:string,size:number) => [...v].reduce((n,c)=>n+("0123456789€".includes(c)?556:c===" "||c==="."||c===","?278:c==="-"?333:c==="E"?667:c==="U"||c==="R"?722:600),0)*size/1000;
+    const employer = bodyOther.find(s=>s.title === "Werkgever");
+    const employee = bodyOther.find(s=>s.title === "Medewerker");
+    const employerGrid = grid(employer?.rows ?? [],1,243);
+    const employeeGrid = grid(employee?.rows ?? [],2,244);
+    const identityHeight = employer && employee ? 22+Math.max(employerGrid.height,employeeGrid.height)+12 : 0;
+    const data = bodyOther.filter(s=>s!==employer && s!==employee).map(s=>({title:s.title,...grid(s.rows,4,511)}));
+    const holidayGrid = grid(holiday?.rows ?? [],3,511);
+    const cumulativeNote = wrap(cumulativeRows.find(r=>String(r[0]) === "Cumulatieven")?.[1] ?? "",487,7.2);
+    const cumulativeGrid = grid(cumulativeRows.filter(r=>String(r[0]) !== "Cumulatieven"),4,487);
+    const amountWidth = (v:string,size:number) => measure(v,size,true);
     const calcRows = calculation.rows.map(row=>({label:wrap(row[0],198,8.5),value:wrap(row[1],79,8.5),strong:/totaal bruto|netto uit te betalen/i.test(String(row[0]))}));
     const calcHeights = calcRows.map(row=>Math.max(row.label.length,row.value.length)*11+5);
     const detailRows = (details?.rows ?? []).map(row=>{
@@ -105,17 +126,18 @@ export function buildModernPayslipPdf(admin: Employer, title: string, period: st
       return {inline,label:wrap(shortLabel(row[0]),inline?123:194,7.2),value:wrap(shortValue(row[1]),inline?65:194,8.5)};
     });
     const detailHeights = detailRows.map(row=>(row.inline?Math.max(row.label.length*9,row.value.length*10):row.label.length*9+row.value.length*10)+5);
-    const employerLines=wrap(`${admin.name} / ${period}`,310,9);
+    const employerLines=wrap(period,310,9);
     const top=722-(employerLines.length-1)*11;
-    const dataHeight=data.reduce((n,s)=>n+22+s.height+6,0);
-    const leftHeight=22+calcHeights.reduce((a,b)=>a+b,0)+(holiday?.rows.length?32+holidayGrid.height:0);
+    const dataHeight=identityHeight+data.reduce((n,s)=>n+22+s.height+10,0);
+    const leftHeight=22+calcHeights.reduce((a,b)=>a+b,0);
     const rightHeight=22+detailHeights.reduce((a,b)=>a+b,0);
-    const footerHeight=32+cumulativeGrid.height;
-    if (top-dataHeight-Math.max(leftHeight,rightHeight)<65+footerHeight+12) return false;
+    const footerHeight=40+cumulativeGrid.height+cumulativeNote.length*9;
+    const holidayHeight=holiday?.rows.length?32+holidayGrid.height:0;
+    if (top-dataHeight-Math.max(leftHeight,rightHeight)-holidayHeight<65+footerHeight+12) return false;
     page=1;
     rect(42,793,24,4,teal);text("BoekBalans",76,790,12,teal,true);
     text(/concept/i.test(title)?"CONCEPT / SALARISSPECIFICATIE":"SALARISSPECIFICATIE",42,772,7.5,muted,true);
-    text("Loonstrook medewerker",42,750,20,ink,true);
+    text("Loonstrook",42,750,24,ink,true);
     employerLines.forEach((v,i)=>text(v,42,734-i*11,9,muted));
     const net=calculation.rows.find(row=>/^Netto uit te betalen$/i.test(String(row[0])));
     if(net){rect(376,737,177,64,"0.91 0.96 0.94");text("NETTO UIT TE BETALEN",388,781,7.2,teal,true);text(net[1],388,754,18,teal,true);}
@@ -133,7 +155,12 @@ export function buildModernPayslipPdf(admin: Employer, title: string, period: st
       });
     };
     let at=top;
-    data.forEach(s=>{blockTitle(s.title,42,at,511);drawGrid(s,42,at-22);at-=22+s.height+6;});
+    if(employer && employee){
+      blockTitle("Werkgever",42,at,243);drawGrid(employerGrid,42,at-22);
+      blockTitle("Medewerker",309,at,244);drawGrid(employeeGrid,309,at-22);
+      at-=identityHeight;
+    }
+    data.forEach(s=>{blockTitle(s.title,42,at,511);drawGrid(s,42,at-22);at-=22+s.height+10;});
     blockTitle("Van bruto naar netto",42,at,293);
     let left=at-22;
     calcRows.forEach((row,i)=>{
@@ -142,7 +169,7 @@ export function buildModernPayslipPdf(admin: Employer, title: string, period: st
       row.value.forEach((v,k)=>text(v,329-amountWidth(v,8.5),left-k*11,8.5,ink,true));
       left-=calcHeights[i];
     });
-    if(holiday?.rows.length){left-=10;blockTitle("Vakantiegeld",42,left,293);drawGrid(holidayGrid,42,left-22);}
+
     blockTitle("Heffingen en pensioen",359,at,194);
     let right=at-22;
     detailRows.forEach((row,i)=>{
@@ -150,11 +177,16 @@ export function buildModernPayslipPdf(admin: Employer, title: string, period: st
       row.value.forEach((v,k)=>text(v,row.inline?553-amountWidth(v,8.5):359,right-(row.inline?0:row.label.length*9+2)-k*10,8.5,ink,true));
       right-=detailHeights[i];
     });
+    if(holiday?.rows.length){
+      const holidayTop=Math.min(left,right)-12;
+      blockTitle("Vakantiegeld",42,holidayTop,511);drawGrid(holidayGrid,42,holidayTop-22);
+    }
     if(cumulativeRows.length){
       const footerTop=65+footerHeight;
       rect(42,65,511,footerHeight,"0.94 0.97 0.96");
       text("Cumulatieven t/m deze periode",54,footerTop-17,10,teal,true);
       drawGrid(cumulativeGrid,54,footerTop-32);
+      cumulativeNote.forEach((v,i)=>text(v,54,footerTop-38-cumulativeGrid.height-i*9,7.2,muted));
     }
     return true;
   };
@@ -222,6 +254,13 @@ export function buildModernPayslipPdf(admin: Employer, title: string, period: st
   finish();
   const encoder = new TextEncoder();
   const objects = ["", "", "", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>"];
+  payslipFonts.forEach((font,index)=>{
+    const streamId=objects.length;
+    objects.push(`<< /Length ${font.hex.length} /Length1 ${font.length} /Filter [/ASCIIHexDecode /FlateDecode] >>\nstream\n${font.hex}\nendstream`);
+    const descriptorId=objects.length;
+    objects.push(`<< /Type /FontDescriptor /FontName /${font.name} /Flags 32 /FontBBox [${font.bbox.join(" ")}] /ItalicAngle 0 /Ascent ${font.ascent} /Descent ${font.descent} /CapHeight ${font.capHeight} /StemV 80 /FontFile2 ${streamId} 0 R >>`);
+    objects[3+index]=`<< /Type /Font /Subtype /TrueType /BaseFont /${font.name} /FirstChar 32 /LastChar 255 /Widths [${font.widths.join(" ")}] /Encoding /WinAnsiEncoding /FontDescriptor ${descriptorId} 0 R >>`;
+  });
   const ids: number[] = [];
   pages.forEach(stream => {
     const content = objects.length; objects.push(`<< /Length ${encoder.encode(stream).length} >>\nstream\n${stream}\nendstream`);
