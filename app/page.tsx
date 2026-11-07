@@ -1917,7 +1917,7 @@ function buildTablePdf(
   periodLabel: string,
   sections: PdfTableSection[],
 ) {
-  if (/loonstrook/i.test(title)) return buildModernPayslipPdf(admin, title, periodLabel, sections);
+  if (/loonstrook|werkgeversoverzicht/i.test(title)) return buildModernPayslipPdf(admin, title, periodLabel, sections);
   const compactPayslip = false;
   const encoder = new TextEncoder();
   const pages: string[] = [];

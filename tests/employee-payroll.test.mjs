@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { newEmployeeInput,markEmployeeSalaryPaid,calculateEmployeePayroll,employeePayrollErrors,employeeSalary,employeeExpenseEntry,employeeJournal,employeePayslipSections,whiteMonthly2026,statutoryMinimum } from "../app/lib/employee-payroll.ts";
+import { newEmployeeInput,markEmployeeSalaryPaid,calculateEmployeePayroll,employeePayrollErrors,employeeSalary,employeeExpenseEntry,employeeJournal,employeePayslipSections,employeeEmployerSections,whiteMonthly2026,statutoryMinimum } from "../app/lib/employee-payroll.ts";
+import { buildModernPayslipPdf } from "../app/lib/payslip-pdf.ts";
 import { companyCashAmount,operatingEntries,vatEntries,payrollSupplement,salaryDeclarationProposal,syncDeclarationEntries } from "../app/lib/payroll-accounting.ts";
 const input=(extra={})=>({...newEmployeeInput(2026),employeeId:"e",name:"Medewerker Test",employeeNumber:"001",birthDate:"1990-02-01",address:"Straat 1",employerName:"Werk BV",employerAddress:"Laan 1",wageTaxNumber:"123L01",period:"2026-01",startDate:"2026-01-01",contractHours:40,paidHours:173.33,minimumHourly:14.71,baseSalary:3000,pensionFund:"Fonds",pensionReference:"Reglement / franchise verwerkt",pensionEmployeeAmount:150,pensionEmployerAmount:250,premiumReference:"Beschikking Whk 2026; Aof klein; AWf hoog",standardTaxConfirmed:true,reviewed:true,...extra});
 const record=(i,id="s",prior=[])=>employeeSalary(id,i,calculateEmployeePayroll(i,prior));
@@ -91,8 +92,23 @@ test("duplicates and edits affecting later periods rejected, but last-period cor
 test("payslip snapshot includes mandatory contract and minimum-wage information and actual fiscal cumulatives",()=>{
  const jan=record(input());const i=input({period:"2026-02"});const feb=record(i,"feb",[jan]);
  const sections=employeePayslipSections(feb,[jan,feb]); const text=JSON.stringify(sections);
- for(const value of ["Medewerker Test","Schriftelijk / onbepaalde tijd / oproep","Contracturen per week","Verloonde uren","minimumuurloon","Pensioen werknemer","Werkgeversheffing Zvw","Fiscaal loon cumulatief"])assert.ok(text.includes(value),value);
+ for(const value of ["Medewerker Test","Schriftelijk / onbepaalde tijd / oproep","Contracturen per week","Verloonde uren","minimumuurloon","Pensioen werknemer","Fiscaal loon cumulatief","SV-loon cumulatief"])assert.ok(text.includes(value),value);
  assert.equal(sections.at(-1).rows.find(r=>r[0]==="Fiscaal loon cumulatief")[1],new Intl.NumberFormat("nl-NL",{style:"currency",currency:"EUR"}).format(5700));
+});
+
+test("employee and employer copies separate costs while retaining saved amounts, dates and long pension references",async()=>{
+ const s=record(input({pensionReference:"Uitgebreide pensioenonderbouwing met franchise en deeltijd. ".repeat(8),netAllowance:75,netDeduction:10,extraGross:80,specialGross:125,specialRate:40,specialReference:"Gecontroleerd",hourlyWage:17.31,fullTimeHours:40,specialAnnualWage:36000}));
+ const before=JSON.stringify(s), employee=employeePayslipSections(s,[]), employer=employeeEmployerSections(s);
+ const employeeText=JSON.stringify(employee), employerText=JSON.stringify(employer);
+ for(const value of ["Werkgeversheffing Zvw","Premie AWf","Opslag Wko","Totale loonkosten","Uitgebreide pensioenonderbouwing"])assert.ok(!employeeText.includes(value),value);
+ for(const value of ["Opslag Wko (werkgever)","Totale loonkosten werkgever","Uitgebreide pensioenonderbouwing"])assert.ok(employerText.includes(value),value);
+ assert.ok(employeeText.includes("01-02-1990"));assert.ok(employeeText.includes("01-01-2026"));
+ const cum=employee.at(-1).rows;
+ assert.equal(cum.find(r=>r[0]==="Verloonde uren cumulatief")[1],"173,33");
+ const pdf=await buildModernPayslipPdf({name:"Werk BV",fiscalYear:2026},"CONCEPT loonstrook","2026-01 Medewerker Test",employee).text();
+ assert.equal((pdf.match(/\/Type \/Page\b/g)??[]).length,1,"employee copy with bonus, overtime, allowances and deduction fits one A4");
+ assert.ok(!pdf.includes("2026-01-01"));assert.ok(!pdf.includes("Uitgebreide pensioenonderbouwing"));
+ assert.equal(JSON.stringify(s),before,"exports must not recalculate or change saved payroll");
 });
 
 test("custom holiday base can include a bonus while retaining special tax treatment",()=>{
