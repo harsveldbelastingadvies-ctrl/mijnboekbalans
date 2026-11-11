@@ -1,6 +1,7 @@
 // Deliberate classification by the preparer, not a place-of-supply rules engine.
 export const salesVatOptions = [
   ["nl", "Nederlandse btw (ook buitenlandse klant)"],
+  ["nl_reverse", "Btw verlegd binnen Nederland · 1e"],
   ["eu_goods", "EU-goederenlevering 0% · 3b + ICP"],
   ["eu_services", "EU-dienst btw verlegd · 3b + ICP"],
   ["export_goods", "Uitvoer goederen buiten EU · 3a"],
@@ -56,6 +57,11 @@ export function salesVatError(details: SalesVatDetails | undefined, amount: numb
   if (vatRate !== 0) return "Gebruik 0% Nederlandse btw bij deze btw-behandeling. Buitenlandse btw leg je afzonderlijk vast.";
   if (!conditionsConfirmed) return "Bevestig de fiscale behandeling en toepasselijke voorwaarden voor deze factuur.";
   if (treatment === "exempt") return "";
+  if (treatment === "nl_reverse") {
+    if (country !== "NL" || customerType !== "business") return "Binnenlandse verlegging vereist een Nederlandse ondernemer als afnemer.";
+    if (!/^NL[0-9]{9}B[0-9]{2}$/.test(customerVatId)) return "Vul het Nederlandse btw-id van de afnemer in (NL123456789B01).";
+    return "";
+  }
   if (country === "NL") return "Kies het buitenlandse land van de afnemer / belastingheffing.";
   const eu = euCountries.includes(country);
   if (["eu_goods", "eu_services", "oss", "foreign_goods"].includes(treatment) && !(eu || treatment === "eu_goods" && country === "XI")) return "Deze keuze vereist een EU-btw-land. XI geldt uitsluitend voor goederen in Noord-Ierland.";
@@ -93,7 +99,7 @@ export function buildInternationalVat(entries: SalesEntry[]) {
   for (const entry of selected) {
     const details = entry.salesVat;
     const treatment = details?.treatment ?? "nl";
-    const code = treatment === "nl" ? entry.vatRate === 21 ? "1a" : entry.vatRate === 9 ? "1b" : "1e" : treatment === "export_goods" ? "3a" : ["eu_goods", "eu_services"].includes(treatment) ? "3b" : treatment === "foreign_goods" ? "3c" : "";
+    const code = treatment === "nl" ? entry.vatRate === 21 ? "1a" : entry.vatRate === 9 ? "1b" : "1e" : treatment === "nl_reverse" ? "1e" : treatment === "export_goods" ? "3a" : ["eu_goods", "eu_services"].includes(treatment) ? "3b" : treatment === "foreign_goods" ? "3c" : "";
     const rubric = rubrics.find((row) => row.code === code);
     if (rubric) { rubric.basis += entry.amount; rubric.vat += dutchVat(entry); }
     else excluded.push(entry);

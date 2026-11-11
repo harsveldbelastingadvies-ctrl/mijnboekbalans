@@ -248,8 +248,9 @@ omzet buiten de Nederlandse aangifte. Alle bedragen worden in euro ingevoerd.
 Buitenlandse btw wordt apart ingevoerd (creditnota: negatief), telt mee in bruto
 factuurbedrag/open posten/bankbedrag en reservering, maar niet in Nederlandse
 verschuldigde btw. Bij een gesplitste factuur wordt het buitenlandse btw-bedrag
-naar rato verdeeld met een afrondingsrest op de laatste regel. Gebruik aparte
-boekingen als binnen één factuur verschillende fiscale routes moeten gelden.
+naar rato verdeeld met een afrondingsrest op de laatste regel. Iedere nieuwe factuurregel kan een eigen btw-behandeling, land en buitenlands
+btw-bedrag krijgen. Opgeslagen regels delen hetzelfde factuurnummer; de nummering
+loopt één factuur verder. Bestaande opgeslagen regels worden afzonderlijk bewerkt.
 
 Bij particulieren moet je de plaats van levering/dienst, buitenlandse registratie,
 OSS-keuze en de gezamenlijke drempel voor EU-afstandsverkopen en digitale diensten
@@ -351,3 +352,27 @@ rubrieken en correcties vereisen afzonderlijke beoordeling. Er is **geen directe
 verzending naar de Belastingdienst**. Pas na externe indiening registreert de
 gebruiker een datum, kenmerk en eventueel een ontvangstbevestiging. De bestaande
 loonheffingenmodule is eveneens vanuit deze werkruimte bereikbaar.
+
+## Facturen inboeken met meerdere btw-behandelingen
+
+Onder **Boekingen → Factuur inboeken** kies je Verkoopfactuur of Inkoopfactuur / bon.
+Vul eerst relatie, factuurdatum, nummer en omschrijving in. Bij één tarief kun je
+het bedrag inclusief of exclusief btw invullen. **Regel toevoegen** maakt een
+splitsing met per regel een categorie, grondslag en tarief. Bij verkoop kies je
+ook per regel de fiscale behandeling, inclusief vrijstelling, binnenlandse
+verlegging en de bestaande internationale routes. Het totaal blijft zichtbaar;
+de velden voor het totale bedrag worden bij een splitsing alleen-lezen.
+
+Binnenlandse verlegging wordt apart vastgelegd als omzet in rubriek 1e, zonder
+verschuldigde btw of ICP. Hiervoor zijn een Nederlandse zakelijke afnemer, diens
+btw-id en bevestiging van de toepasselijkheid vereist. Dit vervangt de beoordeling
+van de verleggingsregeling niet. De externe factuur moet ‘btw verlegd’, het btw-id
+van de afnemer en de vergoeding per toepasselijk tarief vermelden.
+Bron: [Belastingdienst — Hoe werkt btw verleggen?](https://www.belastingdienst.nl/wps/wcm/connect/bldcontentnl/belastingdienst/zakelijk/btw/btw_berekenen_aan_uw_klanten/waarover_btw_berekenen/verleggingsregeling/hoe_werkt_btw_verleggen).
+
+Dezelfde splitsing is beschikbaar bij geïmporteerde verkoopfacturen, ook als er
+maar één tarief is herkend. Bestaande concepten met één gezamenlijk buitenlands
+btw-bedrag behouden de verdeling naar grondslag. Zodra je een regel aanpast,
+blijven de al verdeelde bedragen op de overige regels staan. Creditnota's gebruiken
+negatieve bedragen; alle regels worden vóór het boeken gevalideerd. Originele
+documentkoppelingen en de btw-/ICP-datum per dienst blijven behouden.
