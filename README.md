@@ -376,3 +376,27 @@ btw-bedrag behouden de verdeling naar grondslag. Zodra je een regel aanpast,
 blijven de al verdeelde bedragen op de overige regels staan. Creditnota's gebruiken
 negatieve bedragen; alle regels worden vóór het boeken gevalideerd. Originele
 documentkoppelingen en de btw-/ICP-datum per dienst blijven behouden.
+
+## Particuliere relaties en toevoegen tijdens inboeken
+
+Bij **Klanten & leveranciers** kies je eerst **Onderneming** of **Particulier**.
+Die keuze staat los van de rol klant/debiteur, leverancier/crediteur of beide.
+Voor particulieren is alleen de volledige naam verplicht; KvK-velden en KvK-zoeken
+worden verborgen. E-mail en adres zijn optioneel. Bestaande relaties zonder deze
+nieuwe keuze behouden hun zakelijke weergave en kunnen handmatig naar particulier
+worden omgezet. De relatielijst, keuzelijsten en het relaties-PDF tonen de keuze;
+particulieren krijgen geen melding dat hun KvK-nummer ontbreekt.
+
+Naast het relatieveld staat **+ Debiteur toevoegen** (of **+ Leverancier toevoegen**).
+Dit opent een venster boven de huidige factuur, zowel bij **Boekingen** als bij
+**Facturen inlezen**. Een al getypte naam wordt overgenomen. **Opslaan en selecteren**
+bewaart de relatie in de actieve administratie en selecteert die direct in de
+betreffende factuur. Alle andere invoer blijft behouden, inclusief bedragen,
+btw-behandelingen, splitsingen, factuurnummer en originele documentkoppeling.
+Annuleren of Escape sluit het venster zonder een relatie aan te maken.
+
+Bij een bestaande naam kun je die relatie direct gebruiken. Is die nu alleen
+leverancier (of alleen klant), dan kun je dezelfde relatie ook voor de andere
+rol gebruiken: de bestaande relatie krijgt beide rollen, zonder dubbele invoer.
+Het onderscheid particulier/onderneming verandert de fiscale btw-keuze op de
+factuur niet automatisch.
