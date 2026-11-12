@@ -1,6 +1,8 @@
 "use client";
 import { formatDutchDate, formatDutchTimestamp } from "./lib/dutch-date";
 import { DutchDateInput } from "./components/dutch-date-input";
+import { WorkspaceHistoryPanel } from "./components/workspace-history-panel";
+import { WorkspaceSync, WorkspaceSaveError, preserveBrowserCache, browserRecoveryCopies, browserCacheKey, recoveryPrefix, type SyncState } from "./lib/workspace-sync";
 
 import {
   ChangeEvent,
@@ -9,6 +11,7 @@ import {
   ReactNode,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -188,13 +191,15 @@ type WorkspaceResponse = {
   profile?: WorkspaceProfile;
   administrations?: Administration[];
   error?: string;
+  code?: string;
+  revision?: string;
 };
 
 type ProfitLossStatement = ReturnType<typeof buildProfitLossStatement>;
 type VatOverview = ReturnType<typeof buildVatOverview>;
 type MonthlySpendableOverview = ReturnType<typeof buildMonthlySpendableOverview>;
 
-const storageKey = "boekbalans-administraties-v1";
+const storageKey = browserCacheKey;
 
 const periodOptions: Array<{ key: PeriodKey; label: string; file: string }> = [
   { key: "year", label: "Hele boekjaar", file: "boekjaar" },
@@ -1638,9 +1643,10 @@ async function workspaceRequest(body: Record<string, unknown>) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(20000),
   });
   const data = (await response.json()) as WorkspaceResponse;
-  if (!response.ok) throw new Error(data.error ?? "Opslagactie mislukt.");
+  if (!response.ok) throw new WorkspaceSaveError(data.error ?? "Opslagactie mislukt.", data.code);
   return data;
 }
 
@@ -2425,6 +2431,11 @@ export default function Home() {
   const [workspacePin, setWorkspacePin] = useState("");
   const [workspaceError, setWorkspaceError] = useState("");
   const [saveStatus, setSaveStatus] = useState("Serveropslag nog niet actief");
+  const [syncState, setSyncState] = useState<SyncState>("saved");
+  const [cacheError, setCacheError] = useState("");
+  const [recoveryCount, setRecoveryCount] = useState(0);
+  const sync = useRef<WorkspaceSync<Administration[], WorkspaceProfile> | null>(null);
+  const pendingCacheKey = useRef("");
   const [setupForm, setSetupForm] = useState({
     workspaceName: "BoekBalans",
     email: "",
@@ -2433,25 +2444,26 @@ export default function Home() {
 
   useEffect(() => {
     let cancelled = false;
-    const saved = window.localStorage.getItem(storageKey);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved) as Administration[];
-        if (parsed.length) {
-          // Load persisted browser data once before normal auto-save begins.
+    try {
+      const saved = window.localStorage.getItem(storageKey);
+      if (saved) {
+        const parsed: unknown = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length && parsed.every(isAdministration)) {
           // eslint-disable-next-line react-hooks/set-state-in-effect
           setAdministrations(parsed);
           setActiveId(parsed[0].id);
         }
-      } catch {
-        window.localStorage.removeItem(storageKey);
       }
+    } catch {
+      // Do not remove a cache that may still contain recoverable bookkeeping.
+      setCacheError("De lokale kopie kon niet worden gelezen. Download een backup zodra je invoer hebt gewijzigd.");
     }
     setHydrated(true);
 
     async function loadWorkspace() {
       try {
         const response = await fetch("/api/workspace", { cache: "no-store" });
+        if (!response.ok) throw new Error("Serveropslag niet bereikbaar.");
         const data = (await response.json()) as WorkspaceResponse;
         if (cancelled) return;
 
@@ -2459,14 +2471,14 @@ export default function Home() {
           setWorkspaceProfile(data.profile);
           setWorkspaceState("locked");
           setSaveStatus("Werkruimte vergrendeld");
-        } else {
+        } else if (data.configured === false) {
           setWorkspaceState("setup");
           setSaveStatus("Werkruimte nog niet ingesteld");
-        }
+        } else throw new Error("Serveropslag gaf geen geldige werkruimte terug.");
       } catch {
         if (!cancelled) {
-          setWorkspaceState("setup");
-          setWorkspaceError("Serveropslag is nog niet bereikbaar. Je kunt de werkruimte opnieuw proberen in te stellen zodra de preview draait.");
+          setWorkspaceState("locked");
+          setWorkspaceError("De serveropslag is niet bereikbaar. Probeer later opnieuw te ontgrendelen.");
         }
       }
     }
@@ -2479,31 +2491,27 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (hydrated) {
-      window.localStorage.setItem(storageKey, JSON.stringify(administrations));
-    }
-  }, [administrations, hydrated]);
+    if (!hydrated || workspaceState !== "unlocked" || !sync.current) return;
+    sync.current.update(administrations);
+    const timeout = window.setTimeout(() => { void sync.current?.flush(); }, 450);
+    return () => window.clearTimeout(timeout);
+  }, [administrations, hydrated, workspaceState]);
 
   useEffect(() => {
-    if (!hydrated || workspaceState !== "unlocked" || !workspacePin) return;
-
-    const timeout = window.setTimeout(async () => {
-      try {
-        setSaveStatus("Opslaan...");
-        const data = await workspaceRequest({
-          action: "save",
-          pin: workspacePin,
-          administrations,
-        });
-        if (data.profile) setWorkspaceProfile(data.profile);
-        setSaveStatus("Opgeslagen op server");
-      } catch (error) {
-        setSaveStatus(error instanceof Error ? error.message : "Opslaan mislukt");
-      }
-    }, 450);
-
-    return () => window.clearTimeout(timeout);
-  }, [administrations, hydrated, workspacePin, workspaceState]);
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (sync.current?.dirty) { event.preventDefault(); event.returnValue = ""; }
+    };
+    const retry = () => { void sync.current?.flush(); };
+    const hide = () => { if (document.visibilityState === "hidden") void sync.current?.flush(); };
+    window.addEventListener("beforeunload", beforeUnload);
+    window.addEventListener("online", retry);
+    document.addEventListener("visibilitychange", hide);
+    return () => {
+      window.removeEventListener("beforeunload", beforeUnload);
+      window.removeEventListener("online", retry);
+      document.removeEventListener("visibilitychange", hide);
+    };
+  }, []);
 
   const active = administrations.find((admin) => admin.id === activeId) ?? administrations[0];
   const nextSalesInvoiceNumber = getNextInvoiceNumber(active);
@@ -3785,6 +3793,55 @@ export default function Home() {
     });
   };
 
+  const beginWorkspaceSession = (data: WorkspaceResponse, pin: string) => {
+    if (!data.administrations?.length || !data.profile || !data.revision) throw new Error("De server heeft geen volledige werkruimte teruggegeven. Je lokale kopie is behouden.");
+    const sessionKey = `${recoveryPrefix}${uid()}`;
+    pendingCacheKey.current = sessionKey;
+    let confirmedCache = JSON.stringify(data.administrations);
+    try {
+      // Never replace the previous cache unless its differing contents were preserved.
+      preserveBrowserCache(window.localStorage, data.administrations, uid());
+      setRecoveryCount(browserRecoveryCopies(window.localStorage).length);
+      window.localStorage.setItem(storageKey, confirmedCache);
+    } catch { setCacheError("De lokale kopie kon niet worden bijgewerkt. Je bestaande lokale gegevens blijven behouden; download de lokale herstelkopieën."); }
+    sync.current?.stop();
+    sync.current = new WorkspaceSync(data.administrations, data.revision, {
+      save: async (value, revision) => {
+        const result = await workspaceRequest({ action: "save", pin, administrations: value, revision });
+        if (!result.revision || !result.profile) throw new Error("De server heeft het opslaan niet bevestigd.");
+        return { revision: result.revision, profile: result.profile };
+      },
+      persist: (pending) => {
+        try { window.localStorage.setItem(sessionKey, JSON.stringify(pending)); }
+        catch { setCacheError("De lokale herstelkopie kon niet worden bijgewerkt. Download je invoer als backup."); }
+      },
+      clear: () => {
+        try { window.localStorage.removeItem(sessionKey); }
+        catch { setCacheError("De lokale herstelkopie kon niet worden bijgewerkt. Download je invoer als backup."); }
+      },
+      state: (state, message) => {
+        setSyncState(state);
+        setSaveStatus(message || ({ saved: "Opgeslagen op server", pending: "Nog niet opgeslagen op server", saving: "Opslaan…", error: "Opslaan mislukt", conflict: "Opslaan gestopt: nieuwere serverversie" })[state]);
+      },
+      saved: (profile, value) => {
+        setWorkspaceProfile(profile);
+        try {
+          // An older tab may still write the legacy cache; preserve its copy too.
+          if (window.localStorage.getItem(storageKey) !== confirmedCache) preserveBrowserCache(window.localStorage, value, uid());
+          confirmedCache = JSON.stringify(value);
+          window.localStorage.setItem(storageKey, confirmedCache);
+        } catch { setCacheError("De server heeft je invoer opgeslagen, maar de lokale kopie kon niet worden bijgewerkt."); }
+      },
+    });
+    setAdministrations(data.administrations);
+    setActiveId(data.administrations[0].id);
+    setWorkspaceProfile(data.profile);
+    setWorkspacePin(pin);
+    setSyncState("saved");
+    setWorkspaceState("unlocked");
+    setSaveStatus("Opgeslagen op server");
+  };
+
   const setupWorkspace = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setWorkspaceError("");
@@ -3796,14 +3853,7 @@ export default function Home() {
         pin: setupForm.pin,
         administrations,
       });
-      if (data.administrations?.length) {
-        setAdministrations(data.administrations);
-        setActiveId(data.administrations[0].id);
-      }
-      if (data.profile) setWorkspaceProfile(data.profile);
-      setWorkspacePin(setupForm.pin);
-      setWorkspaceState("unlocked");
-      setSaveStatus("Werkruimte ingesteld en opgeslagen");
+      beginWorkspaceSession(data, setupForm.pin);
     } catch (error) {
       setWorkspaceError(error instanceof Error ? error.message : "Instellen mislukt");
     }
@@ -3814,19 +3864,20 @@ export default function Home() {
     setWorkspaceError("");
     try {
       const data = await workspaceRequest({ action: "login", pin: workspacePin });
-      if (data.administrations?.length) {
-        setAdministrations(data.administrations);
-        setActiveId(data.administrations[0].id);
-      }
-      if (data.profile) setWorkspaceProfile(data.profile);
-      setWorkspaceState("unlocked");
-      setSaveStatus("Werkruimte ontgrendeld");
+      beginWorkspaceSession(data, workspacePin);
     } catch (error) {
       setWorkspaceError(error instanceof Error ? error.message : "Ontgrendelen mislukt");
     }
   };
 
   const lockWorkspace = () => {
+    if (sync.current?.dirty) {
+      setSaveStatus("Je invoer is nog niet opgeslagen op server. Probeer opnieuw of download eerst een backup.");
+      void sync.current.flush();
+      return;
+    }
+    sync.current?.stop();
+    sync.current = null;
     setWorkspacePin("");
     setWorkspaceState("locked");
     setSaveStatus("Werkruimte vergrendeld");
@@ -3979,9 +4030,29 @@ export default function Home() {
     );
   }
 
-  if (tab === "filings") return <FilingWorkspace key={active.id} name={active.name} administrationId={active.id} year={active.fiscalYear} pin={workspacePin} dossiers={active.filingDossiers ?? []}
+  const storageNotice = <>
+    {syncState !== "saved" && <div role="status" aria-live="polite" className={`mb-4 rounded-2xl border p-4 text-sm ${syncState === "error" || syncState === "conflict" ? "border-red-300 bg-red-50 text-red-950" : "border-amber-300 bg-amber-50 text-amber-950"}`}>
+      <strong>{saveStatus}</strong>
+      <p className="mt-1">{syncState === "conflict" ? "Je invoer staat nog in dit scherm. Download eerst je backup. Open daarna de nieuwste serverversie en vergelijk beide kopieën voordat je verder boekt." : "Je laatste wijzigingen zijn nog niet bevestigd door de server. Houd dit scherm open totdat het opslaan is voltooid."}</p>
+      <div className="mt-3 flex flex-wrap gap-3">
+        {(syncState === "error" || syncState === "pending") && <button className="secondary-button" onClick={() => { void sync.current?.flush(); }}>Opnieuw opslaan</button>}
+        <button className="secondary-button" onClick={downloadBackup}>Download backup van {active.name}</button>
+        <button className="secondary-button" onClick={() => downloadTextFile("BoekBalans-niet-opgeslagen-werkruimte.json", JSON.stringify({ administrations }, null, 2))}>Download alle invoer</button>
+      </div>
+    </div>}
+    {(recoveryCount > 0 || cacheError) && <div role="status" className="mb-4 rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+      <strong>{cacheError || `${recoveryCount} lokale herstelkopie(ën) bewaard`}</strong>
+      {recoveryCount > 0 && <p className="mt-1">Er zijn lokale kopieën die afwijken van de serverversie. Download en controleer deze op ontbrekende invoer.</p>}
+      <button className="secondary-button mt-3" onClick={() => {
+        try { downloadTextFile("BoekBalans-lokale-herstelkopieen.json", JSON.stringify({ browserCache: window.localStorage.getItem(storageKey), copies: browserRecoveryCopies(window.localStorage, pendingCacheKey.current) }, null, 2)); }
+        catch { setCacheError("Lokale herstelkopieën konden niet worden gelezen."); }
+      }}>Download lokale herstelkopieën</button>
+    </div>}
+  </>;
+
+  if (tab === "filings") return <>{storageNotice}<FilingWorkspace key={active.id} name={active.name} administrationId={active.id} year={active.fiscalYear} pin={workspacePin} dossiers={active.filingDossiers ?? []}
     saveStatus={saveStatus} buildSnapshot={filingSnapshot} onSave={(filingDossiers) => updateActive({ ...active, filingDossiers })} onPdf={downloadFilingSnapshot} onExit={() => setTab("overview")}
-    payroll={<PayrollTaxPanel key={`${active.id}-${active.fiscalYear}`} admin={active} onChange={(next) => updateActive({ ...active, ...next })} onProcess={processPayrollDeclaration} onPdf={downloadFinancePdf} />} />;
+    payroll={<PayrollTaxPanel key={`${active.id}-${active.fiscalYear}`} admin={active} onChange={(next) => updateActive({ ...active, ...next })} onProcess={processPayrollDeclaration} onPdf={downloadFinancePdf} />} /></>;
 
   return (
     <>
@@ -3994,10 +4065,11 @@ export default function Home() {
           <nav aria-label="Administratie" className="sidebar-section">{[["overview", "Overzicht", "01"], ["entries", "Boekingen", "02"], ["invoices", "Facturen inlezen", "03"], ["documents", "Documenten", "04"], ["filings", "Aangiftewerkruimte", "05"], ["contacts", "Klanten & leveranciers", "06"]].map(([key,label,icon]) => <button key={key} className={`sidebar-link ${tab === key ? "is-active" : ""}`} onClick={() => setTab(key as TabKey)}><i>{icon}</i>{label}</button>)}</nav>
           <details className="sidebar-section" open={["payroll","employeePayroll","payrollTax","wkr","rc"].includes(tab)}><summary>SALARIS & DGA</summary>{[["payroll","Salarissen"],["employeePayroll","Medewerkerloonstroken"],["payrollTax","Loonheffingen"],["wkr","Werkkostenregeling"],["rc","Rekening-courant DGA"]].map(([key,label]) => <button key={key} className={`sidebar-link ${tab === key ? "is-active" : ""}`} onClick={() => setTab(key as TabKey)}>{label}</button>)}</details>
           <nav className="sidebar-section">{[["checks",`Controles${checkCount ? ` (${checkCount})` : ""}`],["reports","Rapporten & downloads"],["settings","Instellingen"]].map(([key,label]) => <button className={`sidebar-link ${tab === key ? "is-active" : ""}`} key={key} onClick={() => setTab(key as TabKey)}>{label}</button>)}</nav>
-          <div className="sidebar-footer"><span className="live-dot" /><small>{saveStatus}</small><button onClick={lockWorkspace}>Vergrendel</button></div>
+          <div className="sidebar-footer"><span className="live-dot" style={{ background: syncState === "saved" ? "var(--teal)" : "#b45309" }} /><small aria-live="polite">{saveStatus}</small><button onClick={lockWorkspace}>Vergrendel</button></div>
         </aside>
 
         <section className="min-w-0 px-5 py-5 md:px-8">
+          {storageNotice}
           <div className="workspace-breadcrumb"><span>Werkruimte</span><span>/</span><strong>{tab === "clients" ? "Klanten & administraties" : active.name}</strong><span className="workspace-breadcrumb-right">{workspaceProfile?.workspaceName || "BoekBalans"}</span></div>
           {tab !== "clients" && <><header className="hero-panel">
             <div className="min-w-0">
@@ -5287,6 +5359,7 @@ export default function Home() {
                   />
                 </label>
               </section>
+              <WorkspaceHistoryPanel key={active.id} pin={workspacePin} administrationId={active.id} />
             </div>
           )}
 
