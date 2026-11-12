@@ -40,6 +40,43 @@ de teller reserveert geen nummers tussen gelijktijdige browsersessies.
 
 Controleer de nummering met `pnpm test`.
 
+## Veilige werkruimteopslag en herstelkopieën
+
+De server geeft bij inloggen een versienummer (`revision`) terug. Opslaan kan
+uitsluitend met die versie. Een gelijktijdige of verouderde sessie krijgt HTTP 409
+en kan nieuwere servergegevens niet vervangen. Oude appversies zonder versienummer
+krijgen HTTP 428: download daarin eerst de invoer als backup en open vervolgens
+de actuele app. Een productieomgeving zonder D1-binding weigert opslag; zij wijkt
+niet uit naar een tijdelijk lokaal bestand.
+
+De browser verstuurt één opslagverzoek tegelijk en bewaart nieuwe wijzigingen
+afzonderlijk terwijl het vorige verzoek loopt. De status **Opgeslagen op server**
+verschijnt pas na bevestiging van de laatste wijzigingen. Bij een verbindingsfout
+kun je opnieuw opslaan; bij een versieconflict download je eerst je invoer en
+vergelijk je die met de nieuwste serverversie. Er wordt niet automatisch over
+een conflict heen geschreven. Het scherm waarschuwt bij sluiten met onbevestigde
+wijzigingen. Browserwaarschuwingen bij sluiten zijn afhankelijk van de browser.
+
+Niet bevestigde invoer blijft, zolang browseropslag beschikbaar is, in een eigen
+lokale herstelkopie per sessie staan. Opnieuw inloggen bewaart een afwijkende oude
+browserkopie vóór het laden van de servergegevens. Herstelkopieën van andere
+tabbladen of eerdere bezoeken worden niet bij het inloggen verwijderd. Als de
+browseropslag vol of uitgeschakeld is, verschijnt een melding met een backupoptie.
+De invoer gaat dan nog wel naar de server; sluit pas na de bevestiging.
+
+Bij elke serverwijziging worden de vorige administraties en hun versie in dezelfde
+D1-transactie bewaard. De laatste **200 eerdere werkruimteversies** blijven
+beschikbaar onder **Rapporten & downloads → Automatische herstelkopieën**.
+Na ontgrendelen kun je daar de actieve administratie uit een eerdere versie
+downloaden. Downloaden verandert de huidige administratie niet. Terugzetten via
+de bestaande backupfunctie maakt een nieuwe administratie ter vergelijking.
+De historie bevat geen pincodehash of werkruimteprofiel en omvat geen afzonderlijk
+opgeslagen documentbestanden. Historie wordt vanaf deze wijziging opgebouwd;
+eerder verdwenen gegevens worden hiermee niet alsnog teruggevonden.
+
+Test opslagconflicten, onderbroken verbindingen, versiehistorie en bestaande
+boekhoudfuncties met `pnpm test`.
+
 ## Lokaal openen
 
 De app draait nu op:

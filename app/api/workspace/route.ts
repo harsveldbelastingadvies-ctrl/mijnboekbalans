@@ -1,10 +1,10 @@
 import type { EmployeeSalary, EmployeeDraft } from "../../lib/employee-payroll";
 import type { AccountingEntryFields, PayrollDeclaration, WkrSettings } from "../../lib/payroll-accounting";
-import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { NextRequest, NextResponse } from "next/server";
+import { readWorkspace, writeWorkspace, workspaceRevision, listWorkspaceHistory, readWorkspaceHistory, type WorkspaceDatabase } from "../../lib/workspace-store";
 
 type Entry = AccountingEntryFields & {
   id: string;
@@ -51,16 +51,6 @@ type VatDeductionSettings = {
   manualPercent?: number;
 };
 
-type D1Statement<T = unknown> = {
-  bind: (...values: unknown[]) => D1Statement<T>;
-  first: <Row = T>() => Promise<Row | null>;
-  run: () => Promise<unknown>;
-};
-
-type D1Database = {
-  prepare: <T = unknown>(query: string) => D1Statement<T>;
-};
-
 type Administration = {
   id: string;
   name: string;
@@ -83,6 +73,7 @@ type Administration = {
 };
 
 type WorkspaceStore = {
+  revision?: string;
   profile: {
     workspaceName: string;
     email: string;
@@ -102,14 +93,14 @@ type WorkspaceRequest =
       administrations: Administration[];
     }
   | { action: "login"; pin: string }
-  | { action: "save"; pin: string; administrations: Administration[] };
+  | { action: "save"; pin: string; administrations: Administration[]; revision?: string }
+  | { action: "history"; pin: string }
+  | { action: "snapshot"; pin: string; revision: string; administrationId: string };
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const dataDirectory = join(process.cwd(), "data");
-const storePath = join(dataDirectory, "boekbalans-workspace.json");
-const workspaceId = "main";
 
 function hashPin(pin: string) {
   return createHash("sha256").update(pin).digest("hex");
@@ -124,81 +115,17 @@ function publicProfile(store: WorkspaceStore) {
   };
 }
 
+function getD1Database(): WorkspaceDatabase | null {
+  try {
+    const db = (getCloudflareContext().env as { DB?: WorkspaceDatabase }).DB;
+    if (db) return db;
+  } catch { /* Local development has no Cloudflare context. */ }
+  if (process.env.NODE_ENV === "production") throw new Error("De serveropslag is niet bereikbaar. Je invoer is nog niet opgeslagen.");
+  return null;
+}
+
 async function readStore() {
-  const db = getD1Database();
-  if (db) return readD1Store(db);
-
-  try {
-    const contents = await readFile(storePath, "utf8");
-    return JSON.parse(contents) as WorkspaceStore;
-  } catch (error) {
-    if (
-      typeof error === "object" &&
-      error &&
-      "code" in error &&
-      error.code === "ENOENT"
-    ) {
-      return null;
-    }
-
-    throw error;
-  }
-}
-
-async function writeStore(store: WorkspaceStore) {
-  const db = getD1Database();
-  if (db) {
-    await writeD1Store(db, store);
-    return;
-  }
-
-  await mkdir(dataDirectory, { recursive: true });
-  await writeFile(storePath, JSON.stringify(store, null, 2), "utf8");
-}
-
-function getD1Database() {
-  try {
-    const context = getCloudflareContext();
-    return (context.env as { DB?: D1Database }).DB ?? null;
-  } catch {
-    return null;
-  }
-}
-
-async function ensureD1Schema(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS workspace_store (
-        id TEXT PRIMARY KEY,
-        data TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run();
-}
-
-async function readD1Store(db: D1Database) {
-  await ensureD1Schema(db);
-  const row = await db
-    .prepare<{ data: string }>("SELECT data FROM workspace_store WHERE id = ?")
-    .bind(workspaceId)
-    .first<{ data: string }>();
-
-  return row ? (JSON.parse(row.data) as WorkspaceStore) : null;
-}
-
-async function writeD1Store(db: D1Database, store: WorkspaceStore) {
-  await ensureD1Schema(db);
-  await db
-    .prepare(
-      `INSERT INTO workspace_store (id, data, updated_at)
-       VALUES (?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         data = excluded.data,
-         updated_at = excluded.updated_at`,
-    )
-    .bind(workspaceId, JSON.stringify(store), store.updatedAt)
-    .run();
+  return readWorkspace<WorkspaceStore>(getD1Database(), dataDirectory);
 }
 
 function isValidPin(pin: string) {
@@ -218,24 +145,25 @@ function isValidAdministration(value: unknown): value is Administration {
 }
 
 function isValidAdministrationList(value: unknown): value is Administration[] {
-  return Array.isArray(value) && value.every(isValidAdministration);
+  return Array.isArray(value) && value.length > 0 && value.every(isValidAdministration)
+    && new Set(value.map((item) => item.id)).size === value.length;
 }
 
 function json(data: unknown, status = 200) {
-  return NextResponse.json(data, { status });
+  return NextResponse.json(data, { status, headers: { "Cache-Control": "no-store" } });
 }
 
 export async function GET() {
-  const store = await readStore();
-
-  if (!store) {
-    return json({ configured: false });
+  try {
+    const store = await readStore();
+    if (!store) return json({ configured: false });
+    return json({ configured: true, profile: publicProfile(store) });
+  } catch {
+    return json({ error: "Serveropslag is niet bereikbaar." }, 503);
   }
-
-  return json({ configured: true, profile: publicProfile(store) });
 }
 
-export async function POST(request: NextRequest) {
+async function handlePost(request: NextRequest) {
   const body = (await request.json()) as WorkspaceRequest;
   const store = await readStore();
 
@@ -248,6 +176,7 @@ export async function POST(request: NextRequest) {
     }
 
     const nextStore: WorkspaceStore = {
+      revision: randomUUID(),
       profile: {
         workspaceName: body.workspaceName.trim(),
         email: body.email.trim(),
@@ -258,9 +187,10 @@ export async function POST(request: NextRequest) {
       updatedAt: new Date().toISOString(),
     };
 
-    await writeStore(nextStore);
+    if (!await writeWorkspace(getD1Database(), dataDirectory, nextStore, null)) return json({ error: "Werkruimte bestaat al." }, 409);
     return json({
       configured: true,
+      revision: workspaceRevision(nextStore),
       profile: publicProfile(nextStore),
       administrations: nextStore.administrations,
     });
@@ -274,25 +204,56 @@ export async function POST(request: NextRequest) {
   if (body.action === "login") {
     return json({
       configured: true,
+      revision: workspaceRevision(store),
       profile: publicProfile(store),
       administrations: store.administrations,
     });
   }
 
+  if (body.action === "history") {
+    return json({ history: await listWorkspaceHistory(getD1Database(), dataDirectory) });
+  }
+
+  if (body.action === "snapshot") {
+    if (typeof body.revision !== "string" || typeof body.administrationId !== "string") return json({ error: "Herstelkopie is niet geldig." }, 400);
+    const snapshot = await readWorkspaceHistory(getD1Database(), dataDirectory, body.revision) as Administration[] | null;
+    const administration = snapshot?.find((item) => item.id === body.administrationId);
+    if (!administration) return json({ error: "Deze administratie staat niet in deze herstelkopie." }, 404);
+    return json({ administration });
+  }
+
   if (body.action === "save") {
+    if (typeof body.revision !== "string" || !body.revision) {
+      return json({ error: "Deze versie van BoekBalans kan niet veilig opslaan. Download je invoer als backup en open BoekBalans opnieuw.", code: "UPDATE_REQUIRED" }, 428);
+    }
+    if (body.revision !== workspaceRevision(store)) {
+      return json({ error: "Een andere sessie heeft nieuwere gegevens opgeslagen. Je invoer is behouden; download je invoer voordat je de nieuwste serverversie opent.", code: "REVISION_CONFLICT" }, 409);
+    }
     if (!isValidAdministrationList(body.administrations)) {
       return json({ error: "Administraties zijn niet geldig." }, 400);
     }
 
     const nextStore = {
       ...store,
+      revision: randomUUID(),
       administrations: body.administrations,
       updatedAt: new Date().toISOString(),
     };
 
-    await writeStore(nextStore);
-    return json({ ok: true, profile: publicProfile(nextStore) });
+    if (!await writeWorkspace(getD1Database(), dataDirectory, nextStore, body.revision)) {
+      return json({ error: "Een andere sessie heeft nieuwere gegevens opgeslagen. Je invoer is behouden; download je invoer voordat je de nieuwste serverversie opent.", code: "REVISION_CONFLICT" }, 409);
+    }
+    return json({ ok: true, revision: workspaceRevision(nextStore), profile: publicProfile(nextStore) });
   }
 
   return json({ error: "Onbekende actie." }, 400);
+}
+
+export async function POST(request: NextRequest) {
+  try { return await handlePost(request); }
+  catch (error) {
+    if (error instanceof SyntaxError) return json({ error: "Verzoek is niet geldig." }, 400);
+    console.error("Workspace request failed", error instanceof Error ? error.message : "unknown error");
+    return json({ error: "Serveropslag is niet gelukt. Bewaar je invoer als backup en probeer opnieuw." }, 503);
+  }
 }
