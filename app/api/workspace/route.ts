@@ -23,6 +23,7 @@ type Entry = AccountingEntryFields & {
 };
 
 type Contact = {
+  kind?: "business" | "private";
   id: string;
   name: string;
   email: string;

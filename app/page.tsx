@@ -33,6 +33,10 @@ import { isTaxableSalesTurnover, buildInternationalVat, dutchVat, emptySalesVat,
 import { ExpenseTaxTool } from "./components/expense-tax-tool";
 import { deductibleExpenseVat, expenseCents, expenseTaxError, expenseTaxOptions, expenseTaxPreview, isRestaurant, prepareExpenseTaxLines, type ExpenseTaxRule } from "./lib/expense-tax";
 
+import { RelationPicker } from "./components/relation-picker";
+import { ContactFields } from "./components/contact-fields";
+import { QuickContactDialog } from "./components/quick-contact-dialog";
+import { contactKind, contactKindLabel, contactTypeLabel, createContact, emptyContact, toContactDraft, type Contact, type ContactDraft, type ContactRole } from "./lib/contacts";
 import { ClientWorkspace, type ClientDetails } from "./components/client-workspace";
 import { DocumentsPanel } from "./components/documents-panel";
 import { FilingWorkspace } from "./components/filing-workspace";
@@ -84,15 +88,6 @@ type Entry = AccountingEntryFields & {
   nonDeductibleAmount?: number;
   nonDeductibleNote?: string;
   salaryRecordId?: string;
-};
-
-type Contact = {
-  id: string;
-  name: string;
-  email: string;
-  address: string;
-  kvk: string;
-  type: "customer" | "supplier" | "entrepreneur";
 };
 
 type SalaryRecord = EmployeeSalary;
@@ -425,14 +420,6 @@ const emptyEntry = {
   rcDga: "",
   wkrType: "none",
   wkrValue: "",
-};
-
-const emptyContact = {
-  name: "",
-  email: "",
-  address: "",
-  kvk: "",
-  type: "customer" as Contact["type"],
 };
 
 const emptySalary = {
@@ -1627,12 +1614,6 @@ function calculateSalaryTotals(salaries: SalaryRecord[], fiscalYear: number) {
   );
 }
 
-function contactTypeLabel(type: Contact["type"]) {
-  if (type === "customer") return "Klant";
-  if (type === "supplier") return "Leverancier";
-  return "Ondernemer";
-}
-
 function safeFileName(value: string) {
   return value
     .toLowerCase()
@@ -2279,14 +2260,14 @@ function buildContactsPdf(admin: Administration) {
   return buildTablePdf(admin, "Relaties", "Alle relaties", [
     {
       title: "Klanten en leveranciers",
-      headers: ["Naam", "E-mail", "Vestigingsadres", "KvK", "Soort"],
+      headers: ["Naam", "E-mail", "Adres", "KvK", "Relatie"],
       widths: [126, 110, 145, 70, 60],
       rows: admin.contacts.map((contact) => [
         contact.name,
         contact.email || "-",
         contact.address || "-",
-        contact.kvk || "-",
-        contactTypeLabel(contact.type),
+        contactKind(contact) === "private" ? "n.v.t." : contact.kvk || "-",
+        `${contactKindLabel(contact)} · ${contactTypeLabel(contact.type)}`,
       ]),
       emptyText: "Nog geen relaties vastgelegd.",
     },
@@ -2428,6 +2409,7 @@ export default function Home() {
   const [invoiceImportStatus, setInvoiceImportStatus] = useState("");
   const [contactForm, setContactForm] = useState(emptyContact);
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
+  const [quickContact, setQuickContact] = useState<{ administrationId: string; target: "entry" | "draft"; draftId?: string; initialName: string; role: ContactRole } | null>(null);
   const [salaryForm, setSalaryForm] = useState(emptySalary);
   const [editingSalaryId, setEditingSalaryId] = useState<string | null>(null);
   const [payrollEmployeeForm, setPayrollEmployeeForm] = useState(emptyPayrollEmployee);
@@ -2627,7 +2609,6 @@ export default function Home() {
       ? contact.type === "customer" || contact.type === "entrepreneur"
       : contact.type === "supplier" || contact.type === "entrepreneur",
   );
-  const relationListId = `relations-${entryForm.type}`;
   const showDepreciation =
     entryForm.type === "expense" &&
     (entryForm.category === "Investeringen" || investmentVatLinesTotal > 0);
@@ -2714,7 +2695,7 @@ export default function Home() {
   };
 
   const openAdministration = (id: string, destination: TabKey = "overview") => {
-    if (id !== active.id) { setEntryForm(emptyEntry); setEditingEntryId(null); setContactForm(emptyContact); setEditingContactId(null); setSalaryForm(emptySalary); setEditingSalaryId(null); setEntryVatError(""); }
+    if (id !== active.id) { setQuickContact(null); setEntryForm(emptyEntry); setEditingEntryId(null); setContactForm(emptyContact); setEditingContactId(null); setSalaryForm(emptySalary); setEditingSalaryId(null); setEntryVatError(""); }
     setActiveId(id); setTab(destination);
   };
   const createClient = (details: ClientDetails) => {
@@ -3382,14 +3363,7 @@ export default function Home() {
     if (!nextName) return;
 
     const existingContact = active.contacts.find((contact) => contact.id === editingContactId);
-    const nextContact: Contact = {
-      id: editingContactId ?? uid(),
-      name: nextName,
-      email: contactForm.email.trim(),
-      address: contactForm.address.trim(),
-      kvk: contactForm.kvk.trim(),
-      type: contactForm.type,
-    };
+    const nextContact = createContact(contactForm, editingContactId ?? uid());
     const nextContacts = editingContactId
       ? active.contacts.map((contact) => (contact.id === editingContactId ? nextContact : contact))
       : [nextContact, ...active.contacts];
@@ -3409,6 +3383,27 @@ export default function Home() {
     setEditingContactId(null);
   };
 
+  const selectQuickContact = (contact: Contact) => {
+    if (!quickContact || quickContact.administrationId !== active.id) return;
+    const existing = active.contacts.find((item) => item.id === contact.id);
+    if (existing && existing.type !== quickContact.role && existing.type !== "entrepreneur") {
+      updateActive({ ...active, contacts: active.contacts.map((item) => item.id === existing.id ? { ...item, type: "entrepreneur" } : item) });
+    }
+    if (quickContact.target === "entry") {
+      setEntryForm((current) => ({ ...current, relation: contact.name }));
+    } else {
+      setInvoiceDrafts((items) => items.map((draft) => draft.id === quickContact.draftId && draft.administrationId === active.id ? { ...draft, relation: contact.name } : draft));
+    }
+    setQuickContact(null);
+  };
+
+  const saveQuickContact = (draft: ContactDraft) => {
+    if (!quickContact || quickContact.administrationId !== active.id || !draft.name.trim()) return;
+    const contact = createContact(draft, uid());
+    updateActive({ ...active, contacts: [contact, ...active.contacts] });
+    selectQuickContact(contact);
+  };
+
   const searchKvk = async () => {
     const query = kvkQuery.trim();
     if (!query) return;
@@ -3425,12 +3420,7 @@ export default function Home() {
         setKvkStatus("Geen KvK-resultaat gevonden.");
         return;
       }
-      setContactForm({
-        ...contactForm,
-        name: first.name || contactForm.name,
-        kvk: first.kvk || contactForm.kvk,
-        address: first.address || contactForm.address,
-      });
+      setContactForm((current) => current.kind === "private" ? current : { ...current, name: first.name || current.name, kvk: first.kvk || current.kvk, address: first.address || current.address });
       setKvkStatus("Eerste KvK-resultaat ingevuld. Controleer de gegevens.");
     } catch (error) {
       setKvkStatus(
@@ -3623,13 +3613,7 @@ export default function Home() {
   };
 
   const editContact = (contact: Contact) => {
-    setContactForm({
-      name: contact.name,
-      email: contact.email || "",
-      address: contact.address || "",
-      kvk: contact.kvk || "",
-      type: contact.type,
-    });
+    setContactForm(toContactDraft(contact));
     setEditingContactId(contact.id);
     setTab("contacts");
   };
@@ -4185,23 +4169,7 @@ export default function Home() {
                   </div>
                   <p className="eyebrow mt-3">1 · Factuurgegevens</p>
                   <div className="entry-form-grid">
-                    <Field label="Relatie">
-                      <input
-                        className="input"
-                        list={relationListId}
-                        placeholder="Kies of typ een relatie"
-                        value={entryForm.relation}
-                        onChange={(event) => setEntryForm({ ...entryForm, relation: event.target.value })}
-                      />
-                      <datalist id={relationListId}>
-                        {relationSuggestions.map((contact) => (
-                          <option key={contact.id} value={contact.name}>
-                            {contact.type === "customer" ? "Klant" : "Leverancier"}
-                            {contact.kvk ? ` · KvK ${contact.kvk}` : ""}
-                          </option>
-                        ))}
-                      </datalist>
-                    </Field>
+                    <RelationPicker value={entryForm.relation} onChange={(relation) => setEntryForm({ ...entryForm, relation })} contacts={relationSuggestions} role={entryForm.type === "income" ? "customer" : "supplier"} onAdd={() => setQuickContact({ administrationId: active.id, target: "entry", initialName: entryForm.relation, role: entryForm.type === "income" ? "customer" : "supplier" })} />
                     <Field label="Factuurdatum">
                       <DutchDateInput className="input"  value={entryForm.date} onChange={(event) => setEntryForm({ ...entryForm, date: event.target.value })} />
                     </Field>
@@ -4623,6 +4591,7 @@ export default function Home() {
               contacts={active.contacts}
               drafts={activeInvoiceDrafts}
               importStatus={invoiceImportStatus}
+              onAddContact={(draft) => setQuickContact({ administrationId: active.id, target: "draft", draftId: draft.id, initialName: draft.relation === "Onbekende relatie" ? "" : draft.relation, role: draft.type === "income" ? "customer" : "supplier" })}
               onBookSelected={bookInvoiceDrafts}
               onClear={clearInvoiceDrafts}
               onAddVatLine={addInvoiceVatLine}
@@ -5331,9 +5300,7 @@ export default function Home() {
                   </div>
                 </div>
                 <form className="mt-4 grid gap-3" onSubmit={saveContact}>
-                  <Field label="Naam">
-                    <input className="input" value={contactForm.name} onChange={(event) => setContactForm({ ...contactForm, name: event.target.value })} />
-                  </Field>
+                  <ContactFields value={contactForm} onChange={setContactForm} businessSearch={
                   <div className="kvk-search-box">
                     <Field label="Zoeken bij KvK">
                       <div className="flex gap-2">
@@ -5352,22 +5319,7 @@ export default function Home() {
                       {kvkStatus || "Met een KvK API-sleutel kan BoekBalans relaties automatisch aanvullen."}
                     </p>
                   </div>
-                  <Field label="E-mail">
-                    <input className="input" type="email" value={contactForm.email} onChange={(event) => setContactForm({ ...contactForm, email: event.target.value })} />
-                  </Field>
-                  <Field label="Vestigingsadres">
-                    <input className="input" value={contactForm.address} onChange={(event) => setContactForm({ ...contactForm, address: event.target.value })} />
-                  </Field>
-                  <Field label="KvK-nummer">
-                    <input className="input" value={contactForm.kvk} onChange={(event) => setContactForm({ ...contactForm, kvk: event.target.value })} />
-                  </Field>
-                  <Field label="Soort">
-                    <select className="input" value={contactForm.type} onChange={(event) => setContactForm({ ...contactForm, type: event.target.value as Contact["type"] })}>
-                      <option value="customer">Klant</option>
-                      <option value="supplier">Leverancier</option>
-                      <option value="entrepreneur">Ondernemer</option>
-                    </select>
-                  </Field>
+                  } />
                   <div className="grid gap-2 sm:grid-cols-2">
                     <button className="primary-button justify-center py-3">
                       {editingContactId ? "Wijziging opslaan" : "Relatie opslaan"}
@@ -5397,11 +5349,11 @@ export default function Home() {
                         <strong className="block">{contact.name}</strong>
                         <span className="mt-1 block text-sm text-[var(--muted)]">{contact.email || "Geen e-mail"}</span>
                         <span className="mt-1 block text-xs text-[var(--muted)]">
-                          {contact.address || "Geen vestigingsadres"}
-                          {contact.kvk ? ` · KvK ${contact.kvk}` : " · Geen KvK"}
+                          {contact.address || "Geen adres"}
+                          {contactKind(contact) === "business" && (contact.kvk ? ` · KvK ${contact.kvk}` : " · KvK niet ingevuld")}
                         </span>
                       </div>
-                      <span className="type-pill">{contactTypeLabel(contact.type)}</span>
+                      <span className="type-pill">{contactKindLabel(contact)} · {contactTypeLabel(contact.type)}</span>
                       <div className="flex flex-wrap gap-2">
                         <button className="ghost-button" onClick={() => editContact(contact)}>
                           Bewerk
@@ -5459,6 +5411,7 @@ export default function Home() {
         </section>
       </div>
     </main>
+    {quickContact && quickContact.administrationId === active.id && <QuickContactDialog key={`${quickContact.administrationId}-${quickContact.target}-${quickContact.draftId || "entry"}`} initialName={quickContact.initialName} role={quickContact.role} contacts={active.contacts} onSave={saveQuickContact} onSelect={selectQuickContact} onClose={() => setQuickContact(null)} />}
     </>
   );
 }
@@ -6068,6 +6021,7 @@ function InvoiceImportPanel({
   contacts,
   drafts,
   importStatus,
+  onAddContact,
   onAddVatLine,
   onBookSelected,
   onClear,
@@ -6086,6 +6040,7 @@ function InvoiceImportPanel({
   contacts: Contact[];
   drafts: InvoiceDraft[];
   importStatus: string;
+  onAddContact: (draft: InvoiceDraft) => void;
   onAddVatLine: (draftId: string) => void;
   onBookSelected: () => void;
   onClear: () => void;
@@ -6102,7 +6057,6 @@ function InvoiceImportPanel({
   ) => void;
   selectedCount: number;
 }) {
-  const relationListId = "invoice-relations";
 
   return (
     <div className="mt-6 grid gap-5">
@@ -6157,15 +6111,6 @@ function InvoiceImportPanel({
         </div>
       </section>
 
-      <datalist id={relationListId}>
-        {contacts.map((contact) => (
-          <option key={contact.id} value={contact.name}>
-            {contact.type === "customer" ? "Klant" : contact.type === "supplier" ? "Leverancier" : "Ondernemer"}
-            {contact.kvk ? ` · KvK ${contact.kvk}` : ""}
-          </option>
-        ))}
-      </datalist>
-
       <section className="grid gap-4">
         {drafts.map((draft) => {
           const amount = parseAmountInput(draft.amount);
@@ -6203,15 +6148,7 @@ function InvoiceImportPanel({
               </div>
 
               <div className="invoice-form-grid">
-                <Field label="Relatie">
-                  <input
-                    className="input"
-                    list={relationListId}
-                    placeholder="Kies of typ een relatie"
-                    value={draft.relation}
-                    onChange={(event) => onUpdate(draft.id, "relation", event.target.value)}
-                  />
-                </Field>
+                <RelationPicker value={draft.relation} onChange={(relation) => onUpdate(draft.id, "relation", relation)} contacts={contacts} role={draft.type === "income" ? "customer" : "supplier"} onAdd={() => onAddContact(draft)} />
                 <Field label="Factuurdatum">
                   <DutchDateInput
                     className="input"

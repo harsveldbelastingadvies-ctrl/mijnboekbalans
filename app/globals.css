@@ -857,3 +857,7 @@ button:disabled { opacity:.5; cursor:wait; }
 @media (min-width: 1100px) {
   .entry-form-grid, .invoice-form-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
+
+.inline-contact-button { width:fit-content; text-align:left; color:var(--teal); font-size:.8rem; font-weight:700; padding:.4rem 0; text-decoration:underline; text-underline-offset:3px; }
+.inline-contact-button:hover { color:var(--ink); }
+.contact-kind-control { width:100%; max-width:24rem; }
