@@ -437,3 +437,38 @@ leverancier (of alleen klant), dan kun je dezelfde relatie ook voor de andere
 rol gebruiken: de bestaande relatie krijgt beide rollen, zonder dubbele invoer.
 Het onderscheid particulier/onderneming verandert de fiscale btw-keuze op de
 factuur niet automatisch.
+
+## Verkoopfacturen uit Excel / DigiBoox
+
+Ga naar **Facturen inlezen → Verkoopfacturen uit Excel importeren → Kies Excel / CSV**.
+De import ondersteunt `.xlsx`, `.xls` en CSV tot 5 MB, maximaal 10.000 factuurregels
+en 200 kolommen. SheetJS CE 0.20.3 wordt op aanvraag geladen vanaf de meegebouwde
+applicatiebestanden; de export wordt lokaal gelezen, zonder AI en zonder uitvoering
+van formules, macro's of externe koppelingen. Bewaar de originele export zelf;
+deze route maakt geen documentdossier-bijlage of nieuwe administratie aan.
+
+Kies het werkblad en de rij met kolomnamen. Gebruikelijke Nederlandse en Engelse
+kolomnamen worden voorgesteld; iedere koppeling kan worden aangepast. Koppel minimaal
+factuurnummer, factuurdatum, klant en een bedragkolom. Bij ontbrekende btw-percentages
+kan een eenduidig tarief uit grondslag en btw worden afgeleid; anders is een expliciete
+keuze nodig. Nederlandse getalnotatie, echte Excel-datums (ook de 1904-epoch),
+voorloopnullen en negatieve creditbedragen blijven behouden. De bron-btw wordt apart
+opgeslagen als `invoiceVatAmount` en gebruikt in de bestaande rapporten en betaalbedragen;
+een latere correctie van grondslag, tarief of btw-behandeling vervangt dit bronbedrag.
+
+Standaard is iedere rij één factuur; herhaalde factuurnummers zijn dan geblokkeerd.
+Kies **Meerdere factuurregels per factuur** alleen bij afzonderlijke regelbedragen,
+bijvoorbeeld voor 9% en 21% binnen één factuur. Gelijk genummerde regels moeten dezelfde
+klant, factuurdatum en betaalgegevens hebben. Een export met herhaalde factuurtotalen
+is hiervoor niet geschikt. Bestaande nummers (ook in de gewone importwerkvoorraad),
+identieke regels, ongeldige datums, verkeerde boekjaren en niet-aansluitende bedragen
+worden geblokkeerd. De import behandelt Nederlandse 21%, 9% en expliciet beoordeelde
+Nederlandse 0%-omzet; overige fiscale behandelingen gaan via de gewone factuurinvoer.
+
+Ontbreekt de betaalstatus, dan is de zichtbare standaard **Open**. Een factuur die
+als betaald is aangemerkt vereist een echte betaaldatum; deelbetalingen en concepten
+worden niet automatisch verwerkt. Het voorbeeld toont aantallen, fouten en totalen;
+alleen foutloze aangevinkte facturen worden na expliciete controle toegevoegd aan de
+actieve administratie. Bestaande boekingen, contacten en andere administraties blijven
+behouden. De gewone werkruimteopslag met versievergelijking en automatische herstelkopie
+blijft verantwoordelijk voor het opslaan op de server.
