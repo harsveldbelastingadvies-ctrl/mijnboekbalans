@@ -2,12 +2,16 @@
 
 import { useMemo, useRef, useState } from "react";
 import { formatDutchDate } from "../lib/dutch-date";
+import { BankPaymentPanel, type BankReconciliationInput } from "./bank-payment-panel";
+import type { BankStatement, ReconciliationEntry } from "../lib/bank-reconciliation";
 import { previewSpreadsheetInvoices, readInvoiceSpreadsheet, spreadsheetAccept, spreadsheetFields, suggestSpreadsheetHeader, suggestSpreadsheetMapping, type SpreadsheetEntry, type SpreadsheetMapping, type SpreadsheetSheet } from "../lib/spreadsheet-invoices";
 
 const money = new Intl.NumberFormat("nl-NL", { style: "currency", currency: "EUR" });
 const pageSize = 50;
-export function SpreadsheetInvoiceImport({ administrationName, fiscalYear, existingNumbers, onBook }: {
+export function SpreadsheetInvoiceImport({ administrationName, administrationId, iban, pin, existingEntries, bankStatements, onReconcile, onUnlink, fiscalYear, existingNumbers, onBook }: {
   administrationName: string; fiscalYear: number; existingNumbers: string[];
+  administrationId: string; iban: string; pin: string; existingEntries: ReconciliationEntry[]; bankStatements: BankStatement[];
+  onReconcile: (rows: SpreadsheetEntry[], input: BankReconciliationInput) => boolean; onUnlink: (transactionId: string) => void;
   onBook: (entries: SpreadsheetEntry[]) => boolean;
 }) {
   const [sheets, setSheets] = useState<SpreadsheetSheet[]>([]);
@@ -22,6 +26,8 @@ export function SpreadsheetInvoiceImport({ administrationName, fiscalYear, exist
   const [confirmZeroVat, setConfirmZeroVat] = useState(false);
   const [allowMultipleLines, setAllowMultipleLines] = useState(false);
   const [category, setCategory] = useState("Omzet diensten");
+  const [bankMode, setBankMode] = useState(false);
+  const [bankWasOpened, setBankWasOpened] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(0);
@@ -29,9 +35,10 @@ export function SpreadsheetInvoiceImport({ administrationName, fiscalYear, exist
   const sheet = sheets[sheetIndex];
   const preview = useMemo(() => {
     if (!sheet) return { invoices: [], error: "" };
-    try { return { invoices: previewSpreadsheetInvoices(sheet, headerRow, mapping, { fiscalYear, defaultVatRate, defaultStatus, confirmZeroVat, allowMultipleLines, category }, existingNumbers), error: "" }; }
+    const paymentMapping = bankMode ? { ...mapping, status: undefined, paidDate: undefined, outstanding: undefined } : mapping;
+    try { return { invoices: previewSpreadsheetInvoices(sheet, headerRow, paymentMapping, { fiscalYear, defaultVatRate, defaultStatus: bankMode ? "open" : defaultStatus, confirmZeroVat, allowMultipleLines, category }, existingNumbers), error: "" }; }
     catch (error) { return { invoices: [], error: (error as Error).message }; }
-  }, [sheet, headerRow, mapping, fiscalYear, defaultVatRate, defaultStatus, confirmZeroVat, allowMultipleLines, category, existingNumbers]);
+  }, [sheet, headerRow, mapping, fiscalYear, defaultVatRate, defaultStatus, confirmZeroVat, allowMultipleLines, category, existingNumbers, bankMode]);
   const valid = preview.invoices.filter((invoice) => !invoice.errors.length);
   const selected = valid.filter((invoice) => !excluded.has(invoice.key));
   const totals = selected.reduce((sum, invoice) => ({ net: sum.net + invoice.net, vat: sum.vat + invoice.vat, gross: sum.gross + invoice.gross }), { net: 0, vat: 0, gross: 0 });
@@ -69,6 +76,7 @@ export function SpreadsheetInvoiceImport({ administrationName, fiscalYear, exist
       }} />
     </label></div>
     {error && <p role="alert" className="mt-3 text-sm text-red-700">{error}</p>}
+    <label className="mt-4 flex items-start gap-2 text-sm"><input type="checkbox" checked={bankMode} onChange={(event) => { setBankMode(event.target.checked); if (event.target.checked) setBankWasOpened(true); resetReview(); }} /><span>Betalingen bepalen met bankafschriften (PDF). Betaalstatus, betaaldatum en openstaand bedrag uit Excel worden in deze modus niet gebruikt. Alleen gecontroleerde bankkoppelingen maken facturen betaald; de overige blijven open. Dit kan ook voor al ingeboekte open verkoopfacturen.</span></label>
     {sheet && <>
       <p className="mt-4 text-sm"><strong>{fileName}</strong> → {administrationName} · boekjaar {fiscalYear}</p>
       <p className="mt-2 text-sm text-[var(--muted)]">Voor Nederlandse verkoopfacturen met 21%, 9% of beoordeelde 0%-omzet. Gebruik geen export waarin het volledige factuurtotaal op iedere factuurregel wordt herhaald. Verlegde, vrijgestelde en buitenlandse omzet verwerk je afzonderlijk.</p>
@@ -83,13 +91,13 @@ export function SpreadsheetInvoiceImport({ administrationName, fiscalYear, exist
         <label className="text-sm">Categorie voor deze import<select className="input" value={category} onChange={(event) => { setCategory(event.target.value); resetReview(); }}><option>Omzet diensten</option><option>Omzet producten</option><option>Abonnementen</option><option>Overige inkomsten</option></select></label>
       </div>
       <fieldset className="mt-4"><legend className="font-semibold">1 · Controleer welke kolom bij ieder veld hoort</legend>
-        <div className="mt-3 grid gap-3 md:grid-cols-3">{spreadsheetFields.map(([field, label]) => <label key={field} className="text-sm">{label}<select className="input" value={mapping[field] ?? ""} onChange={(event) => {
+        <div className="mt-3 grid gap-3 md:grid-cols-3">{spreadsheetFields.map(([field, label]) => <label key={field} className="text-sm">{label}<select className="input" disabled={bankMode && ["status", "paidDate", "outstanding"].includes(field)} value={mapping[field] ?? ""} onChange={(event) => {
           setMapping((current) => ({ ...current, [field]: event.target.value === "" ? undefined : Number(event.target.value) })); resetReview();
         }}><option value="">Niet in bestand / niet gebruiken</option>{(sheet.rows[headerRow] ?? []).map((cell, index) => <option key={index} value={index}>{index + 1} · {cell.text || "Kolom zonder naam"}</option>)}</select></label>)}</div>
       </fieldset>
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         <label className="text-sm">Btw-tarief als een percentage ontbreekt<select className="input" value={defaultVatRate} onChange={(event) => { setDefaultVatRate(event.target.value); resetReview(); }}><option value="">Afleiden uit bedragen, anders aanvullen</option><option value="21">21%</option><option value="9">9%</option><option value="0">0% (apart beoordelen)</option></select></label>
-        <label className="text-sm">Betaalstatus als betaalgegevens ontbreken<select className="input" value={defaultStatus} onChange={(event) => { setDefaultStatus(event.target.value as "paid" | "open"); resetReview(); }}><option value="open">Open</option><option value="paid">Betaald (betaaldatum verplicht)</option></select></label>
+        <label className="text-sm">Betaalstatus als betaalgegevens ontbreken<select className="input" disabled={bankMode} value={bankMode ? "open" : defaultStatus} onChange={(event) => { setDefaultStatus(event.target.value as "paid" | "open"); resetReview(); }}><option value="open">Open</option><option value="paid">Betaald (betaaldatum verplicht)</option></select></label>
       </div>
       <label className="mt-3 flex items-start gap-2 text-sm"><input type="checkbox" checked={confirmZeroVat} onChange={(event) => { setConfirmZeroVat(event.target.checked); resetReview(); }} /><span>Ik heb gecontroleerd dat eventuele 0%-regels Nederlandse 0%-omzet zijn. Verlegde, vrijgestelde en buitenlandse facturen verwerk ik afzonderlijk met de juiste btw-behandeling.</span></label>
       {preview.error && <p role="alert" className="mt-3 text-sm text-red-700">{preview.error}</p>}
@@ -110,12 +118,15 @@ export function SpreadsheetInvoiceImport({ administrationName, fiscalYear, exist
         </tr>)}
       </tbody></table></div>}
       {preview.invoices.length > pageSize && <div className="mt-3 flex items-center gap-3"><button className="secondary-button" disabled={!page} onClick={() => setPage(page - 1)}>Vorige</button><span>Pagina {page + 1} van {Math.ceil(preview.invoices.length / pageSize)}</span><button className="secondary-button" disabled={(page + 1) * pageSize >= preview.invoices.length} onClick={() => setPage(page + 1)}>Volgende</button></div>}
-      <label className="mt-5 flex items-start gap-2 text-sm"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>Ik heb de administratie, datums, btw, betaalgegevens en totalen van de {selected.length} geselecteerde facturen gecontroleerd.</span></label>
+      {!bankMode && <><label className="mt-5 flex items-start gap-2 text-sm"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>Ik heb de administratie, datums, btw, betaalgegevens en totalen van de {selected.length} geselecteerde facturen gecontroleerd.</span></label>
       <div className="mt-4 flex flex-wrap gap-3"><button className="primary-button" disabled={!confirmed || !selected.length || !!preview.error} onClick={() => {
         if (!confirmed || !selected.length || preview.error) return;
         if (onBook(selected.flatMap((invoice) => invoice.entries))) clear();
         else { setError("De selectie kon niet worden geboekt. Controleer de melding bovenaan en het actuele facturenoverzicht."); setConfirmed(false); }
-      }}>Boek {selected.length} geselecteerde facturen</button><button className="ghost-button" onClick={clear}>Sluit Excel-voorbeeld</button></div>
+      }}>Boek {selected.length} geselecteerde facturen</button></div></>}
+      <button className="ghost-button mt-3" onClick={clear}>Sluit Excel-voorbeeld</button>
     </>}
+    {bankWasOpened && <div hidden={!bankMode}><BankPaymentPanel administrationId={administrationId} administrationName={administrationName} iban={iban} fiscalYear={fiscalYear} pin={pin} existingEntries={existingEntries} storedStatements={bankStatements} newEntries={selected.flatMap((invoice) => invoice.entries)} onUnlink={onUnlink}
+      onApply={(input) => { if (!bankMode || preview.error) return false; const result = onReconcile(selected.flatMap((invoice) => invoice.entries), input); if (result) clear(); return result; }} /></div>}
   </section>;
 }

@@ -3,6 +3,8 @@ import { formatDutchDate, formatDutchTimestamp } from "./lib/dutch-date";
 import { DutchDateInput } from "./components/dutch-date-input";
 import { WorkspaceHistoryPanel } from "./components/workspace-history-panel";
 import { SpreadsheetInvoiceImport } from "./components/spreadsheet-invoice-import";
+import type { BankReconciliationInput } from "./components/bank-payment-panel";
+import { reconcileBankPayments, unlinkBankPayment, type BankStatement } from "./lib/bank-reconciliation";
 import { spreadsheetDate, type SpreadsheetEntry } from "./lib/spreadsheet-invoices";
 import { WorkspaceSync, WorkspaceSaveError, preserveBrowserCache, browserRecoveryCopies, browserCacheKey, recoveryPrefix, type SyncState } from "./lib/workspace-sync";
 
@@ -72,6 +74,8 @@ type PeriodKey = "year" | "q1" | "q2" | "q3" | "q4";
 type WorkspaceState = "checking" | "setup" | "locked" | "unlocked";
 
 type Entry = AccountingEntryFields & {
+  bankPayments?: Array<{ transactionId: string; date: string; amount: number; vatAmount: number }>;
+  bankPaymentIds?: string[];
   invoiceVatAmount?: number;
   id: string;
   date: string;
@@ -156,6 +160,7 @@ type InvoiceDraft = {
 };
 
 type Administration = {
+  bankStatements?: BankStatement[];
   email?: string;
   phone?: string;
   address?: string;
@@ -1411,6 +1416,13 @@ function buildMonthlySpendableOverview(entries: Entry[], fiscalYear: number, vat
       return;
     }
 
+    if (entry.type === "income" && entry.bankPayments?.length) {
+      for (const payment of entry.bankPayments) {
+        const month = byMonth.get(getMonthKeyFromDate(payment.date));
+        if (month) { month.paidIncomeInclVat += payment.amount; month.vatReserve += payment.vatAmount; }
+      }
+      return;
+    }
     const paidMonth = byMonth.get(paymentMonth);
     if (!paidMonth) return;
     if (entry.type === "income") {
@@ -2984,6 +2996,8 @@ export default function Home() {
       entryForm.type === "expense" ? entryForm.nonDeductibleNote.trim() : "";
 
     const rawEntry: Entry = {
+      bankPaymentIds: editedSalesEntry?.bankPaymentIds,
+      bankPayments: editedSalesEntry?.bankPayments,
       invoiceVatAmount: retainedInvoiceVatAmount,
       id: editingEntryId ?? uid(),
       rcDga: entryForm.type === "expense" && entryForm.paymentMethod === "dga" ? entryForm.rcDga.trim() : undefined,
@@ -3021,6 +3035,9 @@ export default function Home() {
 
     const taxFields = rawEntry.type === "expense" ? prepareExpenseTaxLines([{ type: "expense" as const, date: entryForm.date, amount, vatRate: Number(entryForm.vatRate) }], entryForm.expenseTaxRule, entryForm.nonDeductibleNote, entryForm.inputVatBlocked, parseAmountInput(entryForm.nonDeductibleAmount) ?? 0, Number(vatDeductionPercent), parseAmountInput(entryForm.amountInclVat) ?? undefined)[0] : {};
     const entry: Entry = { ...rawEntry, ...taxFields };
+    if (editedSalesEntry?.bankPaymentIds?.length && (entry.type !== editedSalesEntry.type || entry.amount !== editedSalesEntry.amount || entry.vatRate !== editedSalesEntry.vatRate || entry.status !== "paid" || entry.paidDate !== editedSalesEntry.paidDate || entry.invoiceNumber !== editedSalesEntry.invoiceNumber || getEntryTotalInclVat(entry) !== getEntryTotalInclVat(editedSalesEntry))) {
+      setEntryVatError("Deze boeking is aan bankbetalingen gekoppeld. Ontkoppel eerst de betaling bij Facturen inlezen → Betalingen bepalen met bankafschriften voordat je bedrag, factuurnummer of betaalgegevens wijzigt."); return;
+    }
     const correctionError = deferredVatError(active.entries.filter((item) => item.id !== editingEntryId), [entry], vatDeductionPercent);
     if (correctionError) { setEntryVatError(correctionError); return; }
     updateActive({
@@ -3389,6 +3406,21 @@ export default function Home() {
     return true;
   };
 
+  const bookSpreadsheetWithBank = (rows: SpreadsheetEntry[], input: BankReconciliationInput) => {
+    try {
+      if (rows.some((row) => row.status !== "open" || !row.invoiceNumber.trim() || !row.relation.trim() || !spreadsheetDate(row.date) || Number(row.date.slice(0, 4)) !== active.fiscalYear || !Number.isFinite(row.amount) || row.amount === 0 || ![0, 9, 21].includes(row.vatRate) || !Number.isFinite(row.invoiceVatAmount) || hasDuplicateSalesInvoice(active.entries, row.invoiceNumber) || activeInvoiceDrafts.some((draft) => draft.type === "income" && draft.invoiceNumber.trim().toLowerCase() === row.invoiceNumber.trim().toLowerCase()))) throw new Error("Controleer de Excel-selectie; er zijn ongeldige gegevens of dubbele factuurnummers.");
+      const added: Entry[] = rows.map((row) => ({ ...row, id: uid(), salesVat: salesVatDetails({ ...emptySalesVat }) }));
+      const reconciled = reconcileBankPayments([...added, ...active.entries], active.bankStatements ?? [], input.statements, input.allocations, input.acceptedSimilarIds);
+      updateActive({ ...active, entries: reconciled.entries, bankStatements: reconciled.bankStatements });
+      setInvoiceImportStatus(`${new Set(rows.map((row) => row.invoiceNumber.toLowerCase())).size} nieuwe facturen toegevoegd; ${reconciled.paidInvoiceCount} facturen aan bankbetalingen gekoppeld. Niet-gekoppelde transacties blijven beschikbaar.`);
+      setPeriod("year"); setTab("entries"); return true;
+    } catch (error) { setInvoiceImportStatus((error as Error).message); return false; }
+  };
+  const unlinkBankTransaction = (transactionId: string) => {
+    try { const result = unlinkBankPayment(active.entries, active.bankStatements ?? [], transactionId); updateActive({ ...active, entries: result.entries, bankStatements: result.bankStatements }); setInvoiceImportStatus("Betaling en alle bijbehorende facturen ontkoppeld. Die facturen staan weer open; de banktransacties en bron-PDF blijven behouden."); }
+    catch (error) { setInvoiceImportStatus((error as Error).message); }
+  };
+
   const saveContact = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const nextName = contactForm.name.trim();
@@ -3666,6 +3698,7 @@ export default function Home() {
   };
 
   const removeEntry = (entryId: string) => {
+    if (active.entries.find((entry) => entry.id === entryId)?.bankPaymentIds?.length) { setEntryVatError("Ontkoppel eerst de bijbehorende bankbetaling bij Facturen inlezen voordat je deze boeking verwijdert."); return; }
     const linkedSalary = activeSalaries.find(s => s.id === active.entries.find(e => e.id === entryId)?.salaryRecordId);
     if (linkedSalary) { setTab(linkedSalary.employeePayroll ? "employeePayroll" : "payroll"); return; }
     if (active.entries.find((entry) => entry.id === entryId)?.payrollDeclarationId) { setTab("payrollTax"); return; }
@@ -4682,6 +4715,7 @@ export default function Home() {
           {tab === "invoices" && (
             <>
             <SpreadsheetInvoiceImport key={`${active.id}-${active.fiscalYear}`} administrationName={active.name} fiscalYear={active.fiscalYear}
+              administrationId={active.id} iban={active.iban} pin={workspacePin} existingEntries={active.entries} bankStatements={active.bankStatements ?? []} onReconcile={bookSpreadsheetWithBank} onUnlink={unlinkBankTransaction}
               existingNumbers={[...active.entries.filter((entry) => entry.type === "income").map((entry) => entry.invoiceNumber ?? ""), ...activeInvoiceDrafts.filter((draft) => draft.type === "income").map((draft) => draft.invoiceNumber)]}
               onBook={bookSpreadsheetEntries} />
             <InvoiceImportPanel
