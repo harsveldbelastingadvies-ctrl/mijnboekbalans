@@ -472,3 +472,59 @@ alleen foutloze aangevinkte facturen worden na expliciete controle toegevoegd aa
 actieve administratie. Bestaande boekingen, contacten en andere administraties blijven
 behouden. De gewone werkruimteopslag met versievergelijking en automatische herstelkopie
 blijft verantwoordelijk voor het opslaan op de server.
+
+## PDF-bankafschriften aan verkoopfacturen koppelen
+
+Onder **Facturen inlezen → Verkoopfacturen uit Excel importeren** staat
+**Betalingen bepalen met bankafschriften (PDF)**. Dit werkt met de geselecteerde
+nieuwe Excel-facturen én met bestaande open verkoopfacturen in de actieve
+administratie. De betaalvelden uit Excel worden in deze modus uitgeschakeld:
+alleen gecontroleerde bankkoppelingen bepalen betaaldatum en betaalstatus.
+Niet-gekoppelde nieuwe facturen blijven open. Reeds betaalde bestaande facturen
+worden niet opnieuw afgeboekt.
+
+Kies maximaal twaalf PDF's tegelijk, ieder tot 5 MB en maximaal 500 transacties.
+De bron-PDF wordt na PIN- en administratiecontrole bewaard bij **Documenten → Bank**.
+AI-herkenning is opt-in per uploadselectie: de interface vermeldt de overdracht
+aan OpenAI en zonder het vinkje wordt geen AI-verzoek gedaan. De bestaande
+`OPENAI_API_KEY` wordt gebruikt, met optioneel `OPENAI_BANK_MODEL` (anders
+`OPENAI_INVOICE_MODEL`, standaard `gpt-4.1`). De Responses API gebruikt een strikt
+schema, `store: false`, begrensde requestgrootte en een timeout. Een ontbrekende
+sleutel, fout of afgebroken/onvolledige API-response levert geen gedeeltelijke
+automatisch verwerkte bankimport op: de PDF blijft bewaard en handmatige aanvulling
+blijft mogelijk. Datums en bedragen worden niet verzonnen.
+
+Controleer de herkende eigen rekening, EUR-valuta, bronpagina's en alle bij- én
+afschrijvingen. Regelbedragen en omschrijvingen kunnen worden gecorrigeerd en
+ontbrekende transacties worden toegevoegd. Begin- en eindsaldo worden, als beide
+bekend zijn, op de cent aangesloten. Ontbrekende saldi zijn zichtbaar en vereisen
+handmatige broncontrole. Ieder nieuw afschrift moet volledig worden bevestigd;
+wijzigingen maken die bevestiging ongeldig. De leesresultaten en koppelvoorstellen
+blijven tijdelijk tot **Facturen en bankkoppelingen verwerken**; de originele PDF
+is dan al afzonderlijk opgeslagen.
+
+Koppelvoorstellen gebruiken een exact factuurkenmerk met aansluitend bedrag, of
+een wederzijds eenduidige klantnaam én bedrag. Alleen een gelijk bedrag is geen
+voorstel. Dubbele/ambigue referenties en voorschotten blijven voor handmatige
+beoordeling. Het overzicht ondersteunt één betaling voor meerdere facturen en
+meerdere betalingen die samen één factuur voldoen. Factuurbedrag en bankbedrag
+moeten volledig sluiten; onvolledige deelbetalingen blijven ongekoppeld beschikbaar
+voor een later afschrift. Niet-gekoppelde bankmutaties worden geen extra omzet-
+of kostenboekingen. Er wordt geen valuta omgerekend.
+
+Identieke PDF's worden op hash herkend. Unieke banktransactie-ID's mogen niet dubbel
+voorkomen. Mogelijk overlappende mutaties uit verschillende afschriften worden
+geblokkeerd totdat de gebruiker ze met de bron heeft gecontroleerd en, alleen als
+het afzonderlijke betalingen zijn, bewust vrijgeeft. Koppelingen naar al gebruikte
+bankbetalingen zijn geblokkeerd. De validaties worden bij het verwerken opnieuw
+uitgevoerd tegen de actuele administratie; alles wordt in één werkruimtemutatie
+toegevoegd, met de bestaande revisiecontrole en herstelkopieën.
+
+`bankStatements` bewaart de bevestigde mutaties, documentverwijzingen en
+factuurkoppelingen. `bankPaymentIds` en `bankPayments` op de boekingsregels bewaren
+de concrete betaalmomenten en bedragen, met een centvaste verdeling over btw-regels.
+Het maandoverzicht gebruikt die echte ontvangstmomenten, ook over jaargrenzen.
+Factuurdatum, omzet, btw en btw-periode blijven behouden. Financiële gegevens van
+gekoppelde regels kunnen pas na ontkoppelen worden gewijzigd of verwijderd.
+**Ontkoppel betaling en bijbehorende facturen** opent de volledige samenhangende
+groep opnieuw; bron-PDF's, mutaties en andere boekingen blijven behouden.
