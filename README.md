@@ -440,7 +440,11 @@ factuur niet automatisch.
 
 ## Verkoopfacturen uit Excel / DigiBoox
 
-Ga naar **Facturen inlezen → Verkoopfacturen uit Excel importeren → Kies Excel / CSV**.
+Ga naar **Facturen inlezen → Alleen facturen uit Excel → Kies Excel / CSV**.
+De import heeft drie stappen: **Bestanden → Controleren → Opslaan**. Je kunt terug
+zonder de ingelezen gegevens te verliezen. Kolominstellingen staan ingeklapt en
+hoeven alleen open als de automatisch voorgestelde gegevens niet kloppen.
+Losse PDF-facturen, bonnen en UBL-bestanden staan in een afzonderlijk uitklapvak.
 De import ondersteunt `.xlsx`, `.xls` en CSV tot 5 MB, maximaal 10.000 factuurregels
 en 200 kolommen. SheetJS CE 0.20.3 wordt op aanvraag geladen vanaf de meegebouwde
 applicatiebestanden; de export wordt lokaal gelezen, zonder AI en zonder uitvoering
@@ -475,8 +479,10 @@ blijft verantwoordelijk voor het opslaan op de server.
 
 ## PDF-bankafschriften aan verkoopfacturen koppelen
 
-Onder **Facturen inlezen → Verkoopfacturen uit Excel importeren** staat
-**Betalingen bepalen met bankafschriften (PDF)**. Dit werkt met de geselecteerde
+Kies **Facturen inlezen → Facturen met bankbetalingen**. De stappen zijn
+**Bestanden → Controleren → Koppelingen**. Voeg bij Bestanden je Excel-export en
+bank-PDF’s toe; bij bestaande facturen is alleen een bankafschrift nodig.
+Dit werkt met de geselecteerde
 nieuwe Excel-facturen én met bestaande open verkoopfacturen in de actieve
 administratie. De betaalvelden uit Excel worden in deze modus uitgeschakeld:
 alleen gecontroleerde bankkoppelingen bepalen betaaldatum en betaalstatus.
@@ -492,16 +498,28 @@ aan OpenAI en zonder het vinkje wordt geen AI-verzoek gedaan. De bestaande
 schema, `store: false`, begrensde requestgrootte en een timeout. Een ontbrekende
 sleutel, fout of afgebroken/onvolledige API-response levert geen gedeeltelijke
 automatisch verwerkte bankimport op: de PDF blijft bewaard en handmatige aanvulling
-blijft mogelijk. Datums en bedragen worden niet verzonnen.
+blijft mogelijk. Datums en bedragen worden niet verzonnen. Bij een geweigerd
+AI-verzoek vermeldt de melding een veilige foutcategorie en HTTP-status: tegoed,
+bestedings- of gebruikslimiet, tijdelijke drukte, sleutel of modeltoegang. De ruwe
+API-fout wordt niet aan de gebruiker getoond. Een leeg, onbevestigd leesresultaat
+kan in dezelfde controle opnieuw worden gelezen zonder eerst te verwijderen;
+ingevulde of bevestigde transacties worden daarbij niet overschreven.
 
-Controleer de herkende eigen rekening, EUR-valuta, bronpagina's en alle bij- én
+Controleer één afschrift tegelijk. Het overzicht is leesbaar; **Aanpassen** opent
+alleen de gekozen transactie. Controleer de herkende eigen rekening, EUR-valuta, bronpagina's en alle bij- én
 afschrijvingen. Regelbedragen en omschrijvingen kunnen worden gecorrigeerd en
 ontbrekende transacties worden toegevoegd. Begin- en eindsaldo worden, als beide
 bekend zijn, op de cent aangesloten. Ontbrekende saldi zijn zichtbaar en vereisen
 handmatige broncontrole. Ieder nieuw afschrift moet volledig worden bevestigd;
 wijzigingen maken die bevestiging ongeldig. De leesresultaten en koppelvoorstellen
-blijven tijdelijk tot **Facturen en bankkoppelingen verwerken**; de originele PDF
+blijven tijdelijk tot **Opslaan en afronden**; de originele PDF
 is dan al afzonderlijk opgeslagen.
+
+Bij Koppelingen zie je eerst de voorstellen. Met **Ontvangsten zonder koppeling**
+kun je zelf een factuur kiezen; **Alle bankmutaties** toont ook afschrijvingen.
+**Later koppelen** haalt de samenhangende betaling/factuurgroep uit het huidige
+voorstel; deze gegevens blijven bewaard en bestaande koppelingen blijven intact.
+Elke wijziging maakt de definitieve controlebevestiging ongeldig.
 
 Koppelvoorstellen gebruiken een exact factuurkenmerk met aansluitend bedrag, of
 een wederzijds eenduidige klantnaam én bedrag. Alleen een gelijk bedrag is geen

@@ -4,6 +4,7 @@ import { ensureDocumentSchema, saveDocument } from "../../../lib/document-store"
 import { readLimitedBody } from "../../../lib/request-body";
 import { documentFormat, maxDocumentSize } from "../../../lib/documents";
 import { normalizeBankStatement } from "../../../lib/bank-reconciliation";
+import { bankRecognitionFailure } from "../../../lib/ai-recognition-errors";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,7 +51,7 @@ export async function POST(request: NextRequest) {
         }),
       });
       const data = await response.json() as { status?: string; output_text?: string; output?: Array<{ content?: Array<{ text?: string }> }> };
-      if (!response.ok) return manual("PDF bewaard, maar AI-herkenning is nu niet beschikbaar. Probeer het later opnieuw of vul de transacties handmatig aan.");
+      if (!response.ok) return manual(bankRecognitionFailure(response.status, data));
       if (data.status === "incomplete") return manual("PDF bewaard. De herkenning is afgebroken; er zijn geen gedeeltelijke leesresultaten overgenomen. Splits een groot afschrift op.");
       const output = data.output_text || data.output?.flatMap((item) => item.content ?? []).map((item) => item.text ?? "").join("");
       if (!output) return manual("PDF bewaard, maar er is geen leesbaar transactieresultaat. Vul de transacties aan of probeer een kleiner afschrift.");

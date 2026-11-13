@@ -4718,6 +4718,8 @@ export default function Home() {
               administrationId={active.id} iban={active.iban} pin={workspacePin} existingEntries={active.entries} bankStatements={active.bankStatements ?? []} onReconcile={bookSpreadsheetWithBank} onUnlink={unlinkBankTransaction}
               existingNumbers={[...active.entries.filter((entry) => entry.type === "income").map((entry) => entry.invoiceNumber ?? ""), ...activeInvoiceDrafts.filter((draft) => draft.type === "income").map((draft) => draft.invoiceNumber)]}
               onBook={bookSpreadsheetEntries} />
+            <details className="panel mt-5">
+              <summary className="cursor-pointer font-semibold">Losse PDF-facturen, bonnen of UBL-bestanden inlezen{activeInvoiceDrafts.length ? ` (${activeInvoiceDrafts.length} concepten)` : ""}</summary>
             <InvoiceImportPanel
               vatDeductionPercent={vatDeductionPercent}
               fiscalYear={active.fiscalYear}
@@ -4738,6 +4740,7 @@ export default function Home() {
               onUpdateVatLine={updateInvoiceVatLine}
               selectedCount={selectedInvoiceDrafts.length}
             />
+            </details>
             </>
           )}
 
