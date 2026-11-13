@@ -80,11 +80,12 @@ export function salesVatError(details: SalesVatDetails | undefined, amount: numb
   }
   return "";
 }
-export type SalesEntry = { inputVatAmount?: number; type: "income" | "expense"; amount: number; vatRate: number; date: string; relation?: string; invoiceNumber?: string; salesVat?: SalesVatDetails; balanceOnly?: boolean; salaryRecordId?: string; payrollDeclarationId?: string };
+export type SalesEntry = { invoiceVatAmount?: number; inputVatAmount?: number; type: "income" | "expense"; amount: number; vatRate: number; date: string; relation?: string; invoiceNumber?: string; salesVat?: SalesVatDetails; balanceOnly?: boolean; salaryRecordId?: string; payrollDeclarationId?: string };
 export function invoicedVat(entry: SalesEntry) {
   if (entry.balanceOnly) return 0;
   if (entry.type === "expense" && entry.inputVatAmount !== undefined) return entry.inputVatAmount;
   if (entry.type === "income" && entry.salesVat && entry.salesVat.treatment !== "nl") return isForeignVat(entry.salesVat.treatment) ? entry.salesVat.foreignVatAmount : 0;
+  if (entry.type === "income" && Number.isFinite(entry.invoiceVatAmount)) return entry.invoiceVatAmount!;
   return entry.amount * entry.vatRate / 100;
 }
 export function dutchVat(entry: SalesEntry) {

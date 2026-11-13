@@ -2,6 +2,8 @@
 import { formatDutchDate, formatDutchTimestamp } from "./lib/dutch-date";
 import { DutchDateInput } from "./components/dutch-date-input";
 import { WorkspaceHistoryPanel } from "./components/workspace-history-panel";
+import { SpreadsheetInvoiceImport } from "./components/spreadsheet-invoice-import";
+import { spreadsheetDate, type SpreadsheetEntry } from "./lib/spreadsheet-invoices";
 import { WorkspaceSync, WorkspaceSaveError, preserveBrowserCache, browserRecoveryCopies, browserCacheKey, recoveryPrefix, type SyncState } from "./lib/workspace-sync";
 
 import {
@@ -70,6 +72,7 @@ type PeriodKey = "year" | "q1" | "q2" | "q3" | "q4";
 type WorkspaceState = "checking" | "setup" | "locked" | "unlocked";
 
 type Entry = AccountingEntryFields & {
+  invoiceVatAmount?: number;
   id: string;
   date: string;
   vatDate?: string;
@@ -2598,7 +2601,10 @@ export default function Home() {
   const periodFileBase = `${administrationFileBase}-${getPeriodFilePart(period)}`;
   const latestEntries = filteredEntries.slice(0, 4);
   const entryVatLinesTotal = calculateInvoiceVatLineTotal(entryForm.vatLines);
-  const entrySalesTotals = salesInvoiceTotals(salesDraftLines(entryForm), entryForm.salesVat);
+  const editedSalesEntry = active.entries.find((entry) => entry.id === editingEntryId);
+  const retainedInvoiceVatAmount = entryForm.type === "income" && editedSalesEntry?.type === "income" && editedSalesEntry.amount === parseAmountInput(entryForm.amount) && editedSalesEntry.vatRate === Number(entryForm.vatRate) && entryForm.salesVat.treatment === "nl" && Number.isFinite(editedSalesEntry.invoiceVatAmount) ? Number(editedSalesEntry.invoiceVatAmount) : undefined;
+  const calculatedSalesTotals = salesInvoiceTotals(salesDraftLines(entryForm), entryForm.salesVat);
+  const entrySalesTotals = retainedInvoiceVatAmount === undefined ? calculatedSalesTotals : { ...calculatedSalesTotals, vat: retainedInvoiceVatAmount, gross: roundCents(calculatedSalesTotals.base + retainedInvoiceVatAmount) };
   const entryVatLinesInclTotal = entryForm.type === "income" ? entrySalesTotals.gross : calculateInvoiceVatLineInclusiveTotal(entryForm.vatLines);
   const entryUsesSplitVatLines =
     entryForm.vatLines.length > 1 && !editingEntryId;
@@ -2978,6 +2984,7 @@ export default function Home() {
       entryForm.type === "expense" ? entryForm.nonDeductibleNote.trim() : "";
 
     const rawEntry: Entry = {
+      invoiceVatAmount: retainedInvoiceVatAmount,
       id: editingEntryId ?? uid(),
       rcDga: entryForm.type === "expense" && entryForm.paymentMethod === "dga" ? entryForm.rcDga.trim() : undefined,
       wkrType: entryForm.type === "expense" && entryForm.wkrType !== "none" ? entryForm.wkrType as "free" | "exempt" | "nil" : undefined,
@@ -3363,6 +3370,23 @@ export default function Home() {
     );
     setInvoiceImportStatus(`${entries.length} factuur/facturen geboekt.`);
     setTab("entries");
+  };
+
+  const bookSpreadsheetEntries = (rows: SpreadsheetEntry[]) => {
+    // Check against the current administration again at commit time, after preview.
+    if (!rows.length || rows.some((row) => !row.invoiceNumber.trim() || !row.relation.trim() || !spreadsheetDate(row.date) || Number(row.date.slice(0, 4)) !== active.fiscalYear ||
+      !Number.isFinite(row.amount) || row.amount === 0 || ![0, 9, 21].includes(row.vatRate) || !Number.isFinite(row.invoiceVatAmount) ||
+      row.status === "paid" && !spreadsheetDate(row.paidDate ?? "") ||
+      hasDuplicateSalesInvoice(active.entries, row.invoiceNumber) || activeInvoiceDrafts.some((draft) => draft.type === "income" && draft.invoiceNumber.trim().toLowerCase() === row.invoiceNumber.trim().toLowerCase()))) {
+      setInvoiceImportStatus("Excel-selectie niet geboekt: controleer datums, bedragen, betaalgegevens en factuurnummers. Een nummer kan ook al in de werkvoorraad staan.");
+      return false;
+    }
+    const entries: Entry[] = rows.map((row) => ({ ...row, id: uid(), salesVat: salesVatDetails({ ...emptySalesVat }) }));
+    updateActive({ ...active, entries: [...entries, ...active.entries] });
+    setInvoiceImportStatus(`${new Set(rows.map((row) => row.invoiceNumber.trim().toLowerCase())).size} verkoopfacturen uit Excel toegevoegd (${entries.length} boekingsregels). De bestaande boekingen zijn behouden.`);
+    setPeriod("year");
+    setTab("entries");
+    return true;
   };
 
   const saveContact = (event: FormEvent<HTMLFormElement>) => {
@@ -4507,6 +4531,7 @@ export default function Home() {
                     <span>Btw op factuur <strong>{money.format(entryForm.type === "income" ? entrySalesTotals.vat || 0 : entryTaxVat || 0)}</strong></span>
                     <span>Factuurtotaal <strong>{money.format(entryForm.type === "income" ? entrySalesTotals.gross || 0 : (enteredAmount || 0) + (entryTaxVat || 0))}</strong></span>
                   </div>
+                  {retainedInvoiceVatAmount !== undefined && <p className="text-sm text-[var(--muted)]">Het btw-bedrag uit de Excel-export blijft behouden. Bij wijziging van bedrag, tarief of btw-behandeling wordt de btw opnieuw berekend.</p>}
                   {showFinancingTool ? (
                     <div className="entry-vat-lines">
                       <div className="section-title">
@@ -4655,6 +4680,10 @@ export default function Home() {
           {tab === "rc" && <RcPanel key={`${active.id}-${active.fiscalYear}`} admin={active} onChange={(next) => updateActive({ ...active, ...next })} onPdf={downloadFinancePdf} onEntries={() => { cancelEditEntry(); setEntryForm({ ...emptyEntry, type: "expense", category: entryCategories.expense[0], paymentMethod: "dga" }); setTab("entries"); }} />}
 
           {tab === "invoices" && (
+            <>
+            <SpreadsheetInvoiceImport key={`${active.id}-${active.fiscalYear}`} administrationName={active.name} fiscalYear={active.fiscalYear}
+              existingNumbers={[...active.entries.filter((entry) => entry.type === "income").map((entry) => entry.invoiceNumber ?? ""), ...activeInvoiceDrafts.filter((draft) => draft.type === "income").map((draft) => draft.invoiceNumber)]}
+              onBook={bookSpreadsheetEntries} />
             <InvoiceImportPanel
               vatDeductionPercent={vatDeductionPercent}
               fiscalYear={active.fiscalYear}
@@ -4675,6 +4704,7 @@ export default function Home() {
               onUpdateVatLine={updateInvoiceVatLine}
               selectedCount={selectedInvoiceDrafts.length}
             />
+            </>
           )}
 
           {tab === "payroll" && (
