@@ -7,6 +7,7 @@ import vm from "node:vm";
 import { normalizeBankStatement } from "../app/lib/bank-reconciliation.ts";
 import { documentFormat, maxDocumentSize } from "../app/lib/documents.ts";
 import { readLimitedBody } from "../app/lib/request-body.ts";
+import { bankRecognitionFailure } from "../app/lib/ai-recognition-errors.ts";
 
 async function harness({ key = "example-key", provider = {}, providerStatus = 200, throwFetch = false } = {}) {
   const state = { archives: 0, calls: [], schemas: 0 };
@@ -23,6 +24,7 @@ async function harness({ key = "example-key", provider = {}, providerStatus = 20
       if (name.includes("request-body")) return { readLimitedBody };
       if (name.endsWith("/documents")) return { documentFormat, maxDocumentSize };
       if (name.includes("bank-reconciliation")) return { normalizeBankStatement };
+      if (name.includes("ai-recognition-errors")) return { bankRecognitionFailure };
       return nativeRequire(name);
     },
   };
