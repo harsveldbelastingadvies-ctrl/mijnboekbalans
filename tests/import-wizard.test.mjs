@@ -8,7 +8,7 @@ import { formatDutchDate } from "../app/lib/dutch-date.ts";
 
 const cells = (row) => row.map((value) => ({ value, text: String(value) }));
 const sheet = { name: "Facturen", date1904: false, rows: [cells(["Factuurnummer", "Factuurdatum", "Klant", "Bedrag excl btw", "Btw-bedrag", "Btw %", "Status"]), cells(["2024-0114", "01-08-2024", "Klant Jansen", 100, 21, 21, "Open"])] };
-function wizard() {
+function wizard(workbookSheet = sheet) {
   const states = []; let cursor = 0;
   const compiledModule = { exports: {} }, jsx = (type, props) => ({ type, props });
   const code = ts.transpileModule(readFileSync(new URL("../app/components/spreadsheet-invoice-import.tsx", import.meta.url), "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -16,7 +16,7 @@ function wizard() {
     require: (name) => {
       if (name === "react") return { useMemo: (fn) => fn(), useState: (initial) => { const i = cursor++; if (!(i in states)) states[i] = initial; return [states[i], (update) => { states[i] = typeof update === "function" ? update(states[i]) : update; }]; }, useRef: (initial) => { const i = cursor++; if (!(i in states)) states[i] = { current: initial }; return states[i]; } };
       if (name === "react/jsx-runtime") return { jsx, jsxs: jsx, Fragment: "fragment" };
-      if (name.includes("spreadsheet-invoices")) return { ...spreadsheet, readInvoiceSpreadsheet: async () => [structuredClone(sheet)] };
+      if (name.includes("spreadsheet-invoices")) return { ...spreadsheet, readInvoiceSpreadsheet: async () => [structuredClone(workbookSheet)] };
       if (name.includes("dutch-date")) return { formatDutchDate };
       if (name.includes("bank-payment-panel")) return { BankPaymentPanel: function MockBankPanel() {} };
       throw new Error(name);
@@ -80,4 +80,46 @@ test("bank flow advances the same mounted panel through files, review and matchi
   assert.equal(bankPanel(tree).props.stage, "review");
   button(tree, "Werkwijze kiezen").props.onClick(); tree = runtime.render(input);
   assert.ok(bankPanel(tree, false)); assert.equal(applied, 0);
+});
+
+test("select all includes remarks across pages but never books duplicates or invalid financial data", async () => {
+  const sample = { ...sheet, rows: [sheet.rows[0], ...Array.from({ length: 52 }, (_, i) => cells([`INV-${i}`, "01-08-2024", "Klant", 100, 21, 21, ""])),
+    cells(["DUPLICATE", "01-08-2024", "Klant", 100, 21, 21, "Open"]),
+    cells(["BAD-DATE", "31-02-2024", "Klant", 100, 21, 21, "Open"]),
+    cells(["NO-PAYMENT-DATE", "01-08-2024", "Klant", 100, 21, 21, "Betaald"]),
+    cells(["BAD-VAT", "01-08-2024", "Klant", 100, 30, 21, "Open"])] };
+  const runtime = wizard(sample), input = { ...props(), existingNumbers: ["DUPLICATE"] }; let booked;
+  input.onBook = (entries) => { booked = entries; return true; };
+  let tree = runtime.render(input); button(tree, "Alleen facturen uit Excel").props.onClick(); tree = runtime.render(input); await loadExcel(tree); tree = runtime.render(input);
+  assert.match(text(tree), /52 boekbare facturen hebben een opmerking/);
+  assert.match(text(tree), /4 geblokkeerd/);
+  assert.match(text(tree), /Opmerking: Geen betaalstatus/);
+  button(tree, "Selectie wissen").props.onClick(); tree = runtime.render(input);
+  assert.match(text(tree), /0 geselecteerd/); assert.equal(button(tree, "Verder naar opslaan").props.disabled, true);
+  button(tree, "Volgende").props.onClick(); tree = runtime.render(input);
+  for (const number of ["DUPLICATE", "BAD-DATE", "NO-PAYMENT-DATE", "BAD-VAT"]) assert.equal(find(tree, (node) => node.type === "input" && node.props["aria-label"] === `Factuur ${number} meenemen`).props.disabled, true);
+  button(tree, "Alles selecteren").props.onClick(); tree = runtime.render(input);
+  assert.match(text(tree), /52 geselecteerd/);
+  button(tree, "Verder naar opslaan").props.onClick(); tree = runtime.render(input);
+  const label = find(tree, (node) => node.type === "label" && text(node).includes("Ik heb de facturen, bedragen"));
+  find(label, (node) => node.type === "input").props.onChange({ target: { checked: true } });
+  tree = runtime.render(input); button(tree, "Sla 52 facturen op").props.onClick();
+  assert.equal(booked.length, 52); assert.ok(booked.every((entry) => entry.invoiceNumber.startsWith("INV-") && entry.status === "open"));
+});
+
+test("bulk selection invalidates final confirmation and also controls the bank flow's new invoices", async () => {
+  const runtime = wizard(), input = props(); let tree = runtime.render(input);
+  button(tree, "Alleen facturen uit Excel").props.onClick(); tree = runtime.render(input); await loadExcel(tree); tree = runtime.render(input);
+  button(tree, "Verder naar opslaan").props.onClick(); tree = runtime.render(input);
+  const confirm = find(tree, (node) => node.type === "label" && text(node).includes("Ik heb de facturen, bedragen"));
+  find(confirm, (node) => node.type === "input").props.onChange({ target: { checked: true } });
+  tree = runtime.render(input); button(tree, "Terug naar controle").props.onClick(); tree = runtime.render(input);
+  button(tree, "Selectie wissen").props.onClick(); tree = runtime.render(input); button(tree, "Alles selecteren").props.onClick(); tree = runtime.render(input);
+  button(tree, "Verder naar opslaan").props.onClick(); tree = runtime.render(input);
+  assert.equal(button(tree, "Sla 1 facturen op").props.disabled, true);
+  button(tree, "Werkwijze kiezen").props.onClick(); tree = runtime.render(input); button(tree, "Facturen met bankbetalingen").props.onClick(); tree = runtime.render(input);
+  bankPanel(tree).props.onNext(); tree = runtime.render(input); button(tree, "Selectie wissen").props.onClick(); tree = runtime.render(input);
+  assert.equal(bankPanel(tree).props.newEntries.length, 0);
+  button(tree, "Alles selecteren").props.onClick(); tree = runtime.render(input);
+  assert.equal(bankPanel(tree).props.newEntries.length, 1);
 });

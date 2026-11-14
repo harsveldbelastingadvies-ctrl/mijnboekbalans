@@ -477,6 +477,12 @@ actieve administratie. Bestaande boekingen, contacten en andere administraties b
 behouden. De gewone werkruimteopslag met versievergelijking en automatische herstelkopie
 blijft verantwoordelijk voor het opslaan op de server.
 
+Bij **Controleren** werken **Alles selecteren** en **Selectie wissen** over alle
+pagina's van het gekozen werkblad. Informatieve opmerkingen blijven selecteerbaar
+en staan bij de factuur. Geblokkeerde facturen (bijvoorbeeld een bestaand nummer,
+ongeldige datum, ontbrekende betaaldatum of niet-aansluitende btw) worden apart
+geteld en blijven uitgesloten. Een gewijzigde selectie vereist opnieuw bevestiging.
+
 ## PDF-bankafschriften aan verkoopfacturen koppelen
 
 Kies **Facturen inlezen → Facturen met bankbetalingen**. De stappen zijn

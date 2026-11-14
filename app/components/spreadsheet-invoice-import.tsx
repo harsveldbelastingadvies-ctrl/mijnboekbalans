@@ -42,6 +42,7 @@ export function SpreadsheetInvoiceImport({ administrationName, administrationId,
     catch (error) { return { invoices: [], error: (error as Error).message }; }
   }, [sheet, headerRow, mapping, fiscalYear, defaultVatRate, defaultStatus, confirmZeroVat, allowMultipleLines, category, existingNumbers, bankMode]);
   const valid = preview.invoices.filter((invoice) => !invoice.errors.length);
+  const withRemarks = valid.filter((invoice) => invoice.warnings.length);
   const selected = valid.filter((invoice) => !excluded.has(invoice.key));
   const signature = JSON.stringify({ administrationId, fiscalYear, entries: selected.flatMap((invoice) => invoice.entries) });
   const confirmed = confirmedSignature === signature;
@@ -123,10 +124,16 @@ export function SpreadsheetInvoiceImport({ administrationName, administrationId,
 </>}
                 <div className="mt-5 rounded-lg border border-[var(--line)] p-4">
         <h4 className="font-semibold">Controleer je verkoopfacturen</h4>
-        <p className="mt-2 text-sm">{preview.invoices.length} facturen · {valid.length} boekbaar · {preview.invoices.length - valid.length} met aandachtspunten · {selected.length} geselecteerd</p>
+        <p className="mt-2 text-sm">{preview.invoices.length} facturen · {valid.length} boekbaar · {preview.invoices.length - valid.length} geblokkeerd · {selected.length} geselecteerd</p>
+        {!!withRemarks.length && <p className="mt-2 text-sm">{withRemarks.length} boekbare facturen hebben een opmerking. Deze kun je gewoon selecteren en meenemen.</p>}
         <p className="mt-2 text-sm">Selectie: excl. btw <strong>{money.format(totals.net)}</strong> · btw <strong>{money.format(totals.vat)}</strong> · incl. btw <strong>{money.format(totals.gross)}</strong></p>
         <p className="mt-2 text-sm text-[var(--muted)]">Datums buiten het boekjaar en bestaande factuurnummers worden geblokkeerd. Facturen met fouten worden niet geboekt. Bedragen en btw uit de export blijven behouden, inclusief creditfacturen.</p>
       </div>
+      {!!preview.invoices.length && <div className="mt-3 flex flex-wrap items-center gap-3">
+        <button className="secondary-button" disabled={!valid.length} onClick={() => { setExcluded(new Set()); setConfirmedSignature(""); }}>Alles selecteren</button>
+        <button className="ghost-button" disabled={!selected.length} onClick={() => { setExcluded(new Set(valid.map((invoice) => invoice.key))); setConfirmedSignature(""); }}>Selectie wissen</button>
+        <p className="text-sm text-[var(--muted)]">Geldt voor alle pagina&apos;s, inclusief facturen met opmerkingen. Geblokkeerde facturen blijven uitgesloten totdat de fout is opgelost.</p>
+      </div>}
       {!!preview.invoices.length && <div className="mt-3 overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr>{["Meenemen", "Factuur", "Datum", "Klant", "Totaal incl. btw", "Controle"].map((label) => <th className="p-2" key={label} scope="col">{label}</th>)}</tr></thead><tbody>
         {preview.invoices.slice(page * pageSize, (page + 1) * pageSize).map((invoice) => <tr key={invoice.key} className="border-t border-[var(--line)] align-top">
           <td className="p-2"><input type="checkbox" aria-label={`Factuur ${invoice.invoiceNumber || `rij ${invoice.rows[0]}`} meenemen`} disabled={!!invoice.errors.length} checked={!invoice.errors.length && !excluded.has(invoice.key)} onChange={(event) => {
@@ -134,7 +141,7 @@ export function SpreadsheetInvoiceImport({ administrationName, administrationId,
           }} /></td>
           <td className="p-2">{invoice.invoiceNumber || "Ontbreekt"}</td><td className="p-2 whitespace-nowrap">{formatDutchDate(invoice.date) || "Ongeldig"}</td><td className="p-2">{invoice.relation}</td>
           <td className="p-2 whitespace-nowrap">{money.format(invoice.gross)}<p className="text-xs text-[var(--muted)]">Btw {money.format(invoice.vat)}</p></td>
-          <td className="min-w-64 p-2">{invoice.errors.length ? <ul className="list-inside list-disc text-red-700">{invoice.errors.map((message, index) => <li key={index}>{message}</li>)}</ul> : <><span className="font-semibold text-[var(--teal)]">Boekbaar · {invoice.status === "paid" ? "Betaald" : "Open"}</span></>}</td>
+          <td className="min-w-64 p-2">{invoice.errors.length ? <><span className="font-semibold text-red-700">Geblokkeerd</span><ul className="list-inside list-disc text-red-700">{invoice.errors.map((message, index) => <li key={index}>{message}</li>)}</ul></> : <><span className="font-semibold text-[var(--teal)]">Boekbaar · {invoice.status === "paid" ? "Betaald" : "Open"}</span>{!!invoice.warnings.length && <ul className="mt-1 space-y-1 text-[var(--muted)]">{invoice.warnings.map((message, index) => <li key={index}>Opmerking: {message}</li>)}</ul>}</>}</td>
         </tr>)}
       </tbody></table></div>}
       {preview.invoices.length > pageSize && <div className="mt-3 flex items-center gap-3"><button className="secondary-button" disabled={!page} onClick={() => setPage(page - 1)}>Vorige</button><span>Pagina {page + 1} van {Math.ceil(preview.invoices.length / pageSize)}</span><button className="secondary-button" disabled={(page + 1) * pageSize >= preview.invoices.length} onClick={() => setPage(page + 1)}>Volgende</button></div>}
