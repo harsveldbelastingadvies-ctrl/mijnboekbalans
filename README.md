@@ -438,6 +438,21 @@ rol gebruiken: de bestaande relatie krijgt beide rollen, zonder dubbele invoer.
 Het onderscheid particulier/onderneming verandert de fiscale btw-keuze op de
 factuur niet automatisch.
 
+## Handmatig verkoop- en inkoopfacturen inboeken
+
+Het scherm onder **Boekingen** heeft aparte blokken voor factuurgegevens,
+factuurregels en betaling. De omschrijving ondersteunt meerdere regels. Bij één
+btw-regel staan categorie, bedragen en tarief bij elkaar; bij splitsingen bewerk
+je de afzonderlijke regels. Rechts staat op grote schermen een vaste samenvatting
+van klant/leverancier, factuurnummer, datum, bestaande totalen en betaalstatus.
+Op kleine schermen staat deze onder de invoer. Dit is een samenvatting van de
+invoer, geen weergave van het originele factuurdocument.
+
+Privé betaalde kosten en de WKR staan onder een eigen uitklapvak, dat bij een
+bestaande bijzondere instelling openstaat. Btw-tijdvak, internationale
+btw-behandelingen, nieuwe relaties, leningen, kostenaftrek en afschrijvingen blijven
+beschikbaar. De bestaande boekings-, bewerkings- en opslagcontroles blijven gelden.
+
 ## Verkoopfacturen uit Excel / DigiBoox
 
 Ga naar **Facturen inlezen → Alleen facturen uit Excel → Kies Excel / CSV**.
