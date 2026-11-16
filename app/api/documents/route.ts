@@ -31,7 +31,11 @@ export async function POST(request: NextRequest) {
     const row = await findDocument(db, body.administrationId, String(body.id || ""));
     if (!row) return json({ error: "Document niet gevonden in deze administratie." }, 404);
     if (body.action === "download") return new NextResponse(new Uint8Array(await documentBytes(db, row)), { headers: { "Content-Type": row.mime, "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(row.name)}`, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" } });
-    if (body.action === "delete") { await removeDocument(db, row); return json({ ok: true }); }
+    if (body.action === "delete") {
+      const issued=db?await db.prepare("SELECT 1 AS found FROM workspace_store, json_each(data, '$.administrations') AS a, json_each(a.value, '$.issuedSalesInvoices') AS i WHERE workspace_store.id = 'main' AND json_extract(a.value, '$.id') = ? AND json_extract(i.value, '$.documentId') = ? LIMIT 1").bind(body.administrationId,row.id).first():null;
+      if(issued)return json({error:"Deze PDF hoort bij een definitieve verkoopfactuur en moet bewaard blijven."},409);
+      await removeDocument(db, row); return json({ ok: true });
+    }
     if (body.action === "update") return json({ document: await updateDocument(db, row, body.category, body.year) });
     return json({ error: "Onbekende documentactie." }, 400);
   } catch (error) { return json({ error: error instanceof Error ? error.message : "Documentopslag is tijdelijk niet beschikbaar." }, 400); }

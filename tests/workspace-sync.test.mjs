@@ -104,18 +104,18 @@ function pageSession(cache) {
   const source = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
   const start = source.indexOf("  const beginWorkspaceSession = ");
   const end = source.indexOf("  const setupWorkspace = ", start);
-  const code = ts.transpileModule(source.slice(start, end) + "\nglobalThis.begin = beginWorkspaceSession;", { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const code = ts.transpileModule(source.slice(start, end) + "\nglobalThis.begin = beginWorkspaceSession; globalThis.issue = issueSalesInvoice;", { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const state = {}, calls = []; let id = 0;
   const context = { WorkspaceSync, WorkspaceSaveError, preserveBrowserCache, browserRecoveryCopies, recoveryPrefix,
     storageKey: browserCacheKey, uid: () => `copy-${++id}`, window: { localStorage: cache },
-    sync: { current: null }, pendingCacheKey: { current: "" },
+    sync: { current: null }, pendingCacheKey: { current: "" }, invoiceIssueAttempt: { current: null }, setIssuePending: () => {}, setInvoiceSession: () => {},
     workspaceRequest: async (body) => { calls.push(body); return { revision: "server-2", profile: {} }; },
   };
   for (const field of ["CacheError", "RecoveryCount", "SyncState", "SaveStatus", "Administrations", "ActiveId", "WorkspaceProfile", "WorkspacePin", "WorkspaceState"]) {
     context[`set${field}`] = (value) => { state[field] = value; };
   }
   vm.runInNewContext(code, context);
-  return { state, calls, context, begin: context.begin };
+  return { state, calls, context, begin: context.begin, issue: context.issue };
 }
 
 test("actual page login preserves old invoice input before loading the server and does not autosave just for login", async () => {
@@ -143,4 +143,21 @@ test("actual page with full browser storage preserves the old cache and still al
   h.context.sync.current.update([{ id: "edego", entries: ["0045", "0046"] }]); await h.context.sync.current.flush();
   assert.equal(h.calls.length, 1); assert.equal(h.state.SaveStatus, "Opgeslagen op server");
   assert.equal(cache.getItem(browserCacheKey), original);
+});
+
+
+test("actual client blocks unsaved issuance and retries a lost acknowledgement with the original draft and revision", async () => {
+  const h=pageSession(storage()),draft={id:"stable-draft",customerName:"Voorbeeld"},admins=[{id:"demo",entries:[],salesInvoiceDraft:draft}];
+  h.begin({administrations:admins,profile:{},revision:"base"},"123456");
+  Object.assign(h.context,{active:admins[0],administrations:admins,syncState:"saved",workspacePin:"123456",issueInFlight:{current:false},setIssuingInvoice:()=>{},setTab:()=>{}});
+  h.context.invoiceIssueAttempt={current:null};
+  let attempts=[];
+  h.context.workspaceRequest=async body=>{attempts.push(body);if(attempts.length===1)throw new Error("lost acknowledgement");return {administrations:[{...admins[0],salesInvoiceDraft:undefined,issuedSalesInvoices:[{id:draft.id}]}],profile:{},revision:"issued"};};
+  h.context.sync.current.update([{...admins[0],entries:["unsaved"]}]);
+  await assert.rejects(()=>h.issue(draft),/wacht op bevestiging/);assert.equal(attempts.length,0);
+  h.context.sync.current.update(admins);
+  await assert.rejects(()=>h.issue(draft),e=>e.code==="ISSUE_UNCERTAIN");
+  assert.equal(h.state.SyncState,"conflict");assert.equal(h.context.invoiceIssueAttempt.current.id,draft.id);
+  await h.issue(draft);assert.equal(attempts.length,2);assert.equal(attempts[0].revision,"base");assert.equal(attempts[1].revision,"base");
+  assert.deepEqual(attempts[1].draft,draft);assert.equal(h.context.invoiceIssueAttempt.current,null);assert.equal(h.state.SyncState,"saved");
 });

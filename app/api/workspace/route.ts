@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { NextRequest, NextResponse } from "next/server";
 import { readWorkspace, writeWorkspace, workspaceRevision, listWorkspaceHistory, readWorkspaceHistory, type WorkspaceDatabase } from "../../lib/workspace-store";
+import { issuedInvoiceChangesError,type IssuedSalesInvoice,type SalesInvoiceDraft } from "../../lib/issued-sales-invoices";
+import {issueStoredSalesInvoice,SalesInvoiceIssueError} from "../../lib/issue-sales-invoice";
 
 type Entry = AccountingEntryFields & {
   id: string;
@@ -52,6 +54,7 @@ type VatDeductionSettings = {
 };
 
 type Administration = {
+  issuedSalesInvoices?: IssuedSalesInvoice[];
   id: string;
   name: string;
   owner: string;
@@ -93,6 +96,7 @@ type WorkspaceRequest =
       administrations: Administration[];
     }
   | { action: "login"; pin: string }
+  | { action: "issueSalesInvoice"; pin:string; revision:string; administrationId:string; draft:SalesInvoiceDraft }
   | { action: "save"; pin: string; administrations: Administration[]; revision?: string }
   | { action: "history"; pin: string }
   | { action: "snapshot"; pin: string; revision: string; administrationId: string };
@@ -214,6 +218,11 @@ async function handlePost(request: NextRequest) {
     return json({ history: await listWorkspaceHistory(getD1Database(), dataDirectory) });
   }
 
+  if(body.action === "issueSalesInvoice"){
+    const result=await issueStoredSalesInvoice(getD1Database(),dataDirectory,store,body.revision,body.administrationId,body.draft);
+    return json({revision:workspaceRevision(result.store),profile:publicProfile(result.store),administrations:result.store.administrations,invoiceId:result.invoice.id});
+  }
+
   if (body.action === "snapshot") {
     if (typeof body.revision !== "string" || typeof body.administrationId !== "string") return json({ error: "Herstelkopie is niet geldig." }, 400);
     const snapshot = await readWorkspaceHistory(getD1Database(), dataDirectory, body.revision) as Administration[] | null;
@@ -232,6 +241,9 @@ async function handlePost(request: NextRequest) {
     if (!isValidAdministrationList(body.administrations)) {
       return json({ error: "Administraties zijn niet geldig." }, 400);
     }
+
+    const issuedError=issuedInvoiceChangesError(store.administrations,body.administrations);
+    if(issuedError)return json({error:issuedError,code:"ISSUED_INVOICE_LOCKED"},409);
 
     const nextStore = {
       ...store,
@@ -252,6 +264,7 @@ async function handlePost(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try { return await handlePost(request); }
   catch (error) {
+    if(error instanceof SalesInvoiceIssueError)return json({error:error.message,code:error.code},error.status);
     if (error instanceof SyntaxError) return json({ error: "Verzoek is niet geldig." }, 400);
     console.error("Workspace request failed", error instanceof Error ? error.message : "unknown error");
     return json({ error: "Serveropslag is niet gelukt. Bewaar je invoer als backup en probeer opnieuw." }, 503);

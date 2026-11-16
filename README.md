@@ -438,6 +438,21 @@ rol gebruiken: de bestaande relatie krijgt beide rollen, zonder dubbele invoer.
 Het onderscheid particulier/onderneming verandert de fiscale btw-keuze op de
 factuur niet automatisch.
 
+## Handmatig verkoop- en inkoopfacturen inboeken
+
+Het scherm onder **Boekingen** heeft aparte blokken voor factuurgegevens,
+factuurregels en betaling. De omschrijving ondersteunt meerdere regels. Bij één
+btw-regel staan categorie, bedragen en tarief bij elkaar; bij splitsingen bewerk
+je de afzonderlijke regels. Rechts staat op grote schermen een vaste samenvatting
+van klant/leverancier, factuurnummer, datum, bestaande totalen en betaalstatus.
+Op kleine schermen staat deze onder de invoer. Dit is een samenvatting van de
+invoer, geen weergave van het originele factuurdocument.
+
+Privé betaalde kosten en de WKR staan onder een eigen uitklapvak, dat bij een
+bestaande bijzondere instelling openstaat. Btw-tijdvak, internationale
+btw-behandelingen, nieuwe relaties, leningen, kostenaftrek en afschrijvingen blijven
+beschikbaar. De bestaande boekings-, bewerkings- en opslagcontroles blijven gelden.
+
 ## Verkoopfacturen uit Excel / DigiBoox
 
 Ga naar **Facturen inlezen → Alleen facturen uit Excel → Kies Excel / CSV**.
@@ -552,3 +567,17 @@ Factuurdatum, omzet, btw en btw-periode blijven behouden. Financiële gegevens v
 gekoppelde regels kunnen pas na ontkoppelen worden gewijzigd of verwijderd.
 **Ontkoppel betaling en bijbehorende facturen** opent de volledige samenhangende
 groep opnieuw; bron-PDF's, mutaties en andere boekingen blijven behouden.
+
+### Zelf verkoopfacturen maken
+
+De pagina **Verkoopfacturen maken** maakt nieuwe Nederlandse verkoopfacturen met klant/adres, factuur-, leverings- en vervaldatum, aantallen, prijzen inclusief of exclusief btw, meerdere regels en een persoonlijke afsluiting. Nieuwe zakelijke of particuliere debiteuren zijn in hetzelfde scherm toe te voegen. Bewerkingen worden als concept via de bestaande werkruimtesynchronisatie opgeslagen. Een concept-PDF is nadrukkelijk gemarkeerd en reserveert geen nummer.
+
+Definitieve uitgifte vereist een opgeslagen concept en een expliciete controlebevestiging. De geauthenticeerde server kent het volgende vrije factuurnummer toe en schrijft factuursnapshot, omzet-/btw-regels, originele PDF en werkruimtehistorie in één voorwaardelijke D1-transactie. Er verschijnt pas een definitieve PDF-download na serverbevestiging. Het concept-ID is de idempotentiesleutel: opnieuw controleren na een verloren antwoord geeft dezelfde factuur terug. Tijdens een onbekende uitgiftestatus blijft andere invoer geblokkeerd tot het verzoek gecontroleerd is; gewone automatische opslag kan een mogelijk al uitgegeven factuur daardoor niet overschrijven.
+
+Definitieve facturen en hun financiële boekingsregels kunnen niet met een gewone werkruimteopslag worden verwijderd/gewijzigd; betaling en categorisering mogen wel worden bijgewerkt. De document-API beschermt de bijbehorende PDF tegen verwijderen. De opgeslagen PDF wordt gedownload, niet opnieuw opgebouwd. Een nieuwe client moet daarom zowel de factuursnapshots als de boekingen behouden, ook bij herstel/import van een oudere kopie.
+
+Eerste versie: EUR, Nederlandse afzender met btw-id, positieve bedragen, 21%, 9% en expliciet beoordeelde Nederlandse 0%-omzet. Geen buitenlandse/verlegde/vrijgestelde factuuruitgifte, creditnota-uitgifte, logo/handtekening-upload of automatische verzending. Die bestaande btw-verwerkingen blijven wel beschikbaar bij het inboeken van ontvangen/bestaande facturen. Definitieve uitgifte vereist D1; de ontwikkelomgeving schrijft geen vervangende facturen naar lokale opslag.
+
+Validatie omvat afronding per btw-tarief, gelijktijdige uitgifte, idempotent opnieuw proberen, terugrollen bij een mislukte PDF-opslag, PIN-controle en bescherming tegen verlies via oudere clients. Visuele controle gebruikt uitsluitend fictieve gegevens; er worden geen echte klantfacturen uitgegeven tijdens testen.
+
+De PDF volgt een rustige briefindeling: klantadres bovenaan, factuurgegevens daaronder, een tabel met Omschrijving/Totaal, rechts uitgelijnde subtotaal-/btw-regels en daarna betaaltekst en persoonlijke afsluiting. Aantallen en prijsdetails verschijnen waar nodig onder de omschrijving. Afzendergegevens blijven compact onderaan iedere pagina staan. De betaaltekst volgt de gekozen vervaldatum; veertien dagen wordt uitgeschreven. Reeds uitgegeven PDF's blijven als originele bytes bewaard.

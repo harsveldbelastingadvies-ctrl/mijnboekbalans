@@ -9,7 +9,7 @@ export type WorkspaceData = {
   revision?: string;
 };
 type Result = { meta: { changes: number } };
-type Statement = {
+export type Statement = {
   bind: (...values: unknown[]) => Statement;
   first: <T>() => Promise<T | null>;
   all: <T>() => Promise<{ results: T[] }>;
@@ -45,7 +45,7 @@ export async function readWorkspace<T extends WorkspaceData>(db: WorkspaceDataba
 
 // Local development also serializes the compare-and-write and uses atomic rename.
 let localWrite: Promise<unknown> = Promise.resolve();
-export async function writeWorkspace<T extends WorkspaceData>(db: WorkspaceDatabase | null, directory: string, store: T, expectedRevision: string | null) {
+export async function writeWorkspace<T extends WorkspaceData>(db: WorkspaceDatabase | null, directory: string, store: T, expectedRevision: string | null, additionalStatements: Statement[] = []) {
   if (db) {
     await ensureWorkspaceSchema(db);
     if (expectedRevision === null) {
@@ -64,6 +64,7 @@ export async function writeWorkspace<T extends WorkspaceData>(db: WorkspaceDatab
       db.prepare(`DELETE FROM workspace_history WHERE revision NOT IN
         (SELECT revision FROM workspace_history ORDER BY saved_at DESC, rowid DESC LIMIT ?)`)
         .bind(historyLimit),
+      ...additionalStatements,
     ]);
     return results[1].meta.changes === 1;
   }

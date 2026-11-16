@@ -3,6 +3,9 @@ import { formatDutchDate, formatDutchTimestamp } from "./lib/dutch-date";
 import { DutchDateInput } from "./components/dutch-date-input";
 import { WorkspaceHistoryPanel } from "./components/workspace-history-panel";
 import { SpreadsheetInvoiceImport } from "./components/spreadsheet-invoice-import";
+import { SalesInvoicePanel } from "./components/sales-invoice-panel";
+import type { SalesInvoiceDraft, IssuedSalesInvoice, InvoiceParty } from "./lib/issued-sales-invoices";
+import { InvoiceEntrySummary } from "./components/invoice-entry-summary";
 import type { BankReconciliationInput } from "./components/bank-payment-panel";
 import { reconcileBankPayments, unlinkBankPayment, type BankStatement } from "./lib/bank-reconciliation";
 import { spreadsheetDate, type SpreadsheetEntry } from "./lib/spreadsheet-invoices";
@@ -55,6 +58,7 @@ type EntryStatus = "paid" | "open";
 type LoanInterestType = "manual" | "nominal" | "effective";
 type ZvwContributionType = "dga_contribution" | "employer_levy";
 type TabKey =
+  | "salesInvoices"
   | "clients"
   | "documents"
   | "filings"
@@ -74,6 +78,7 @@ type PeriodKey = "year" | "q1" | "q2" | "q3" | "q4";
 type WorkspaceState = "checking" | "setup" | "locked" | "unlocked";
 
 type Entry = AccountingEntryFields & {
+  issuedInvoiceId?: string;
   bankPayments?: Array<{ transactionId: string; date: string; amount: number; vatAmount: number }>;
   bankPaymentIds?: string[];
   invoiceVatAmount?: number;
@@ -160,6 +165,10 @@ type InvoiceDraft = {
 };
 
 type Administration = {
+  issuedSalesInvoices?: IssuedSalesInvoice[];
+  salesInvoiceDraft?: SalesInvoiceDraft;
+  salesInvoiceIssuer?: InvoiceParty;
+  salesInvoiceClosing?: string;
   bankStatements?: BankStatement[];
   email?: string;
   phone?: string;
@@ -2422,6 +2431,11 @@ function buildPayrollOverviewPdf(admin: Administration, salaries: SalaryRecord[]
 export default function Home() {
   const [administrations, setAdministrations] = useState<Administration[]>(starterData);
   const [activeId, setActiveId] = useState(starterData[0].id);
+  const [issuingInvoice, setIssuingInvoice] = useState(false);
+  const [issuePending, setIssuePending] = useState(false);
+  const [invoiceSession, setInvoiceSession] = useState(0);
+  const invoiceIssueAttempt = useRef<{ id: string; revision: string; draft: SalesInvoiceDraft } | null>(null);
+  const issueInFlight = useRef(false);
   const [tab, setTab] = useState<TabKey>("clients");
   const [hydrated, setHydrated] = useState(false);
   const [entryForm, setEntryForm] = useState(emptyEntry);
@@ -2514,7 +2528,7 @@ export default function Home() {
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (sync.current?.dirty) { event.preventDefault(); event.returnValue = ""; }
+      if (sync.current?.dirty || invoiceIssueAttempt.current) { event.preventDefault(); event.returnValue = ""; }
     };
     const retry = () => { void sync.current?.flush(); };
     const hide = () => { if (document.visibilityState === "hidden") void sync.current?.flush(); };
@@ -3698,6 +3712,7 @@ export default function Home() {
   };
 
   const removeEntry = (entryId: string) => {
+    if (active.entries.find(e => e.id === entryId)?.issuedInvoiceId) { setTab("salesInvoices"); setSaveStatus("Een definitieve verkoopfactuur blijft bewaard. Verwerk de betaling of maak een afzonderlijke correctie."); return; }
     if (active.entries.find((entry) => entry.id === entryId)?.bankPaymentIds?.length) { setEntryVatError("Ontkoppel eerst de bijbehorende bankbetaling bij Facturen inlezen voordat je deze boeking verwijdert."); return; }
     const linkedSalary = activeSalaries.find(s => s.id === active.entries.find(e => e.id === entryId)?.salaryRecordId);
     if (linkedSalary) { setTab(linkedSalary.employeePayroll ? "employeePayroll" : "payroll"); return; }
@@ -3740,6 +3755,7 @@ export default function Home() {
   };
 
   const editEntry = (entry: Entry) => {
+    if (entry.issuedInvoiceId) { setTab("salesInvoices"); setSaveStatus("Deze boeking hoort bij een definitieve verkoopfactuur en kan niet worden gewijzigd."); return; }
     if (entry.payrollDeclarationId) { setTab("payrollTax"); return; }
     if (entry.balanceOnly && entry.rcDga) { setTab("rc"); return; }
     if (entry.salaryRecordId) { setTab(activeSalaries.find(s => s.id === entry.salaryRecordId)?.employeePayroll ? "employeePayroll" : "payroll"); return; }
@@ -3852,6 +3868,7 @@ export default function Home() {
 
   const beginWorkspaceSession = (data: WorkspaceResponse, pin: string) => {
     if (!data.administrations?.length || !data.profile || !data.revision) throw new Error("De server heeft geen volledige werkruimte teruggegeven. Je lokale kopie is behouden.");
+    invoiceIssueAttempt.current = null; setIssuePending(false); setInvoiceSession(n => n + 1);
     const sessionKey = `${recoveryPrefix}${uid()}`;
     pendingCacheKey.current = sessionKey;
     let confirmedCache = JSON.stringify(data.administrations);
@@ -3897,6 +3914,35 @@ export default function Home() {
     setSyncState("saved");
     setWorkspaceState("unlocked");
     setSaveStatus("Opgeslagen op server");
+  };
+
+  const issueSalesInvoice = async (draft: SalesInvoiceDraft) => {
+    if (issueInFlight.current) throw new Error("De factuur wordt al verwerkt.");
+    if (!invoiceIssueAttempt.current) {
+      if (!sync.current?.matchesConfirmed(administrations) || syncState !== "saved" || JSON.stringify(active.salesInvoiceDraft) !== JSON.stringify(draft)) throw new Error("Sla het concept op en wacht op bevestiging van de server.");
+      invoiceIssueAttempt.current = { id: draft.id, revision: sync.current.revisionToken, draft };
+      setIssuePending(true);
+      sync.current.stop();
+    }
+    const attempt = invoiceIssueAttempt.current;
+    if (attempt.id !== draft.id) throw new Error("Controleer eerst de uitgifte van het vorige concept.");
+    const adminId = active.id;
+    issueInFlight.current = true; setIssuingInvoice(true);
+    try {
+      const data = await workspaceRequest({ action: "issueSalesInvoice", pin: workspacePin, revision: attempt.revision, administrationId: adminId, draft: attempt.draft });
+      beginWorkspaceSession(data, workspacePin); setActiveId(adminId); setTab("salesInvoices"); invoiceIssueAttempt.current = null;
+    } catch (error) {
+      // Only an explicit rejection is safe to reopen for editing. A lost response may already have committed.
+      if (error instanceof WorkspaceSaveError && ["INVOICE_INVALID", "REVISION_CONFLICT"].includes(error.code)) {
+        try {
+          const current = await workspaceRequest({ action: "login", pin: workspacePin });
+          beginWorkspaceSession(current, workspacePin); setActiveId(adminId); invoiceIssueAttempt.current = null;
+        } catch { throw new WorkspaceSaveError("De uitgifte kon niet worden gecontroleerd. Probeer hetzelfde verzoek opnieuw.", "ISSUE_UNCERTAIN"); }
+        throw error;
+      }
+      setSyncState("conflict"); setSaveStatus("Uitgifte nog niet bevestigd. Controleer hetzelfde verzoek bij Verkoopfacturen maken.");
+      throw new WorkspaceSaveError("De uitgifte is nog niet bevestigd. Gebruik ‘Uitgifte opnieuw controleren’.", "ISSUE_UNCERTAIN");
+    } finally { issueInFlight.current = false; setIssuingInvoice(false); }
   };
 
   const setupWorkspace = async (event: FormEvent<HTMLFormElement>) => {
@@ -4113,13 +4159,13 @@ export default function Home() {
 
   return (
     <>
-    <main className="app-shell min-h-screen bg-[var(--surface)] text-[var(--ink)]">
+    <main inert={issuePending || undefined} className="app-shell min-h-screen bg-[var(--surface)] text-[var(--ink)]">
       <div className="grid min-h-screen workspace-layout">
         <aside className="workspace-sidebar">
           <button className="workspace-brand" onClick={() => setTab("clients")}><span className="brand-mark">B<span>·</span>B</span><span><strong>BoekBalans</strong><small>Helder in je administratie.</small></span></button>
           <div className="sidebar-section"><span>WERKRUIMTE</span><button className={`sidebar-link ${tab === "clients" ? "is-active" : ""}`} onClick={() => setTab("clients")}><i>▦</i> Klanten & administraties</button></div>
           <div className="sidebar-section"><span>ACTIEVE ADMINISTRATIE</span><select className="sidebar-client-select" aria-label="Wissel administratie" value={active.id} onChange={(event) => openAdministration(event.target.value)}>{administrations.map((admin) => <option key={admin.id} value={admin.id}>{admin.name}</option>)}</select></div>
-          <nav aria-label="Administratie" className="sidebar-section">{[["overview", "Overzicht", "01"], ["entries", "Boekingen", "02"], ["invoices", "Facturen inlezen", "03"], ["documents", "Documenten", "04"], ["filings", "Aangiftewerkruimte", "05"], ["contacts", "Klanten & leveranciers", "06"]].map(([key,label,icon]) => <button key={key} className={`sidebar-link ${tab === key ? "is-active" : ""}`} onClick={() => setTab(key as TabKey)}><i>{icon}</i>{label}</button>)}</nav>
+          <nav aria-label="Administratie" className="sidebar-section">{[["overview", "Overzicht", "01"], ["entries", "Boekingen", "02"], ["invoices", "Facturen inlezen", "03"], ["salesInvoices", "Verkoopfacturen maken", "+"], ["documents", "Documenten", "04"], ["filings", "Aangiftewerkruimte", "05"], ["contacts", "Klanten & leveranciers", "06"]].map(([key,label,icon]) => <button key={key} className={`sidebar-link ${tab === key ? "is-active" : ""}`} onClick={() => setTab(key as TabKey)}><i>{icon}</i>{label}</button>)}</nav>
           <details className="sidebar-section" open={["payroll","employeePayroll","payrollTax","wkr","rc"].includes(tab)}><summary>SALARIS & DGA</summary>{[["payroll","Salarissen"],["employeePayroll","Medewerkerloonstroken"],["payrollTax","Loonheffingen"],["wkr","Werkkostenregeling"],["rc","Rekening-courant DGA"]].map(([key,label]) => <button key={key} className={`sidebar-link ${tab === key ? "is-active" : ""}`} onClick={() => setTab(key as TabKey)}>{label}</button>)}</details>
           <nav className="sidebar-section">{[["checks",`Controles${checkCount ? ` (${checkCount})` : ""}`],["reports","Rapporten & downloads"],["settings","Instellingen"]].map(([key,label]) => <button className={`sidebar-link ${tab === key ? "is-active" : ""}`} key={key} onClick={() => setTab(key as TabKey)}>{label}</button>)}</nav>
           <div className="sidebar-footer"><span className="live-dot" style={{ background: syncState === "saved" ? "var(--teal)" : "#b45309" }} /><small aria-live="polite">{saveStatus}</small><button onClick={lockWorkspace}>Vergrendel</button></div>
@@ -4167,6 +4213,8 @@ export default function Home() {
           </>}
           {tab === "clients" && <ClientWorkspace clients={administrations} onOpen={openAdministration} onCreate={createClient} />}
           {tab === "documents" && <DocumentsPanel key={`${active.id}-${active.fiscalYear}`} administrationId={active.id} pin={workspacePin} year={active.fiscalYear} />}
+          {tab === "salesInvoices" && <SalesInvoicePanel key={`${active.id}-${active.fiscalYear}-${invoiceSession}`} admin={active} saved={syncState === "saved" && !issuePending} onSave={draft => setAdministrations(current => current.map(a => a.id === active.id ? { ...a, salesInvoiceDraft: draft } : a))} onContact={contact => setAdministrations(current => current.map(a => a.id === active.id ? { ...a, contacts: [...a.contacts, contact] } : a))} onIssue={issueSalesInvoice} onDownload={async invoice => { await downloadAdministrationDocument(workspacePin, active.id, invoice.documentId); }} />}
+
           {tab === "overview" && <div className="quick-action-grid"><button onClick={() => { cancelEditEntry(); setEntryForm({ ...emptyEntry, type: "expense", category: entryCategories.expense[0] }); setTab("entries"); }}><span>01 / INVOEREN</span><strong>Een boeking toevoegen ↗</strong><small>Inkomsten en uitgaven vastleggen</small></button><button onClick={() => setTab("documents")}><span>02 / BEWAREN</span><strong>Je documentdossier ↗</strong><small>Alle stukken bij de administratie</small></button><button onClick={() => setTab("filings")}><span>03 / CONTROLEREN</span><strong>Een aangifte voorbereiden ↗</strong><small>Een eigen werkruimte voor je aangifte</small></button></div>}
 
           {tab === "overview" && (
@@ -4237,11 +4285,11 @@ export default function Home() {
           {tab === "entries" && (
             <div className="mt-6 grid gap-5">
               <section className="panel entry-workbench">
-                <div className="section-title">
+                <div className="section-title invoice-editor-heading">
                   <div>
-                    <p className="eyebrow">{editingEntryId ? "Correctie" : "Nieuwe regel"}</p>
-                    <h3>{editingEntryId ? "Boeking bewerken" : "Factuur inboeken"}</h3>
-                    <p className="mt-1 text-sm text-[var(--muted)]">Vul de factuurgegevens in, controleer de btw en sla de boeking op.</p>
+                    <p className="eyebrow">{active.name + " · " + active.fiscalYear}</p>
+                    <h3>{editingEntryId ? "Factuur bewerken" : entryForm.type === "income" ? "Verkoopfactuur inboeken" : "Inkoopfactuur inboeken"}</h3>
+                    <p className="mt-1 text-sm text-[var(--muted)]">Van factuurgegevens naar een gecontroleerde boeking, op één scherm.</p>
                   </div>
                   {editingEntryId ? (
                     <button className="ghost-button" onClick={cancelEditEntry} type="button">
@@ -4249,7 +4297,8 @@ export default function Home() {
                     </button>
                   ) : null}
                 </div>
-                <form className="mt-4 grid gap-3" onSubmit={addEntry}>
+                <form className="invoice-editor-form" onSubmit={addEntry}>
+<div className="invoice-editor-toolbar">
                   <div className="segmented-control">
                     <button
                       className={entryForm.type === "income" ? "is-active" : ""}
@@ -4296,14 +4345,13 @@ export default function Home() {
                       Inkoopfactuur / bon
                     </button>
                   </div>
-                  <p className="eyebrow mt-3">1 · Factuurgegevens</p>
-                  <div className="entry-form-grid">
-                    <RelationPicker value={entryForm.relation} onChange={(relation) => setEntryForm({ ...entryForm, relation })} contacts={relationSuggestions} role={entryForm.type === "income" ? "customer" : "supplier"} onAdd={() => setQuickContact({ administrationId: active.id, target: "entry", initialName: entryForm.relation, role: entryForm.type === "income" ? "customer" : "supplier" })} />
+<span className="invoice-editor-context">{editingEntryId ? "Bestaande boeking aanpassen" : "Nieuwe factuur vastleggen"}</span></div>
+<div className="invoice-editor-layout"><div className="invoice-editor-main">
+<section className="invoice-editor-section" aria-labelledby="entry-metadata-title"><h4 id="entry-metadata-title">Factuurgegevens</h4><div className="invoice-metadata-grid">                    <div className="invoice-relation-field"><RelationPicker value={entryForm.relation} onChange={(relation) => setEntryForm({ ...entryForm, relation })} contacts={relationSuggestions} role={entryForm.type === "income" ? "customer" : "supplier"} onAdd={() => setQuickContact({ administrationId: active.id, target: "entry", initialName: entryForm.relation, role: entryForm.type === "income" ? "customer" : "supplier" })} /></div>
                     <Field label="Factuurdatum">
                       <DutchDateInput className="input"  value={entryForm.date} onChange={(event) => setEntryForm({ ...entryForm, date: event.target.value })} />
                     </Field>
-                    {entryForm.type === "expense" && <VatPeriodField date={entryForm.date} selection={entryForm.vatDate} year={active.fiscalYear} period={period} onChange={(vatDate) => { setEntryVatError(""); setEntryForm({ ...entryForm, vatDate }); }} />}
-                    {entryVatError && <p role="alert" className="text-sm text-red-700">{entryVatError}</p>}
+                    {entryVatError && <p role="alert" className="invoice-form-error text-sm text-red-700">{entryVatError}</p>}
                     <div className="grid gap-1 text-sm font-semibold text-[var(--ink)]">
                       <label htmlFor="entry-invoice-number">Factuurnummer</label>
                       <input
@@ -4327,9 +4375,63 @@ export default function Home() {
                       )}
                       {duplicateSalesInvoiceNumber && <p role="alert" className="mt-2 text-xs text-red-700">Dit verkoopfactuurnummer bestaat al. Gebruik een ander nummer.</p>}
                     </div>
-                    <Field label="Omschrijving">
-                      <input className="input" value={entryForm.description} onChange={(event) => setEntryForm({ ...entryForm, description: event.target.value })} />
-                    </Field>
+                    <div className="invoice-vat-period">{entryForm.type === "expense" && <VatPeriodField date={entryForm.date} selection={entryForm.vatDate} year={active.fiscalYear} period={period} onChange={(vatDate) => { setEntryVatError(""); setEntryForm({ ...entryForm, vatDate }); }} />}</div>
+                    <div className="invoice-description-field"><Field label="Omschrijving">
+                      <textarea className="input" rows={3} placeholder="Waar gaat deze factuur over?" value={entryForm.description} onChange={(event) => setEntryForm({ ...entryForm, description: event.target.value })} />
+                    </Field></div>
+</div></section>
+                  {(
+                    <div className="entry-vat-lines invoice-editor-section">
+                      <div className="section-title">
+                        <div>
+                          <h4>Factuurregels</h4>
+                          <p className="invoice-section-caption">Bedragen, categorie en btw bij elkaar.</p>
+                        </div>
+                        <button
+                          className="secondary-button"
+                          disabled={Boolean(editingEntryId)}
+                          onClick={addEntryVatLine}
+                          type="button"
+                        >
+                          Regel toevoegen
+                        </button>
+                      </div>
+                      {!entryUsesSplitVatLines && <div className="invoice-amount-grid">
+<div className="invoice-category-field">                    <Field label="Categorie">
+                      <select
+                        className="input"
+                        value={entryForm.category}
+                        disabled={entryUsesSplitVatLines}
+                        onChange={(event) => {
+                          const category = event.target.value;
+                          setEntryForm({
+                            ...entryForm,
+                            category,
+                            vatLines:
+                              entryForm.vatLines.length === 1
+                                ? [{ ...entryForm.vatLines[0], category }]
+                                : entryForm.vatLines,
+                            depreciationYears: category === "Investeringen" ? entryForm.depreciationYears : "none",
+                            financingPrincipal:
+                              category === loanCategory ? entryForm.financingPrincipal : "",
+                            financingInterest:
+                              category === loanCategory ? entryForm.financingInterest : "",
+                            loanInterestType:
+                              category === loanCategory ? entryForm.loanInterestType : "manual",
+                            loanAnnualRate:
+                              category === loanCategory ? entryForm.loanAnnualRate : "",
+                            loanBalanceBeforePayment:
+                              category === loanCategory ? entryForm.loanBalanceBeforePayment : "",
+                          });
+                        }}
+                      >
+                        {entryCategories[entryForm.type].map((category) => (
+                          <option key={category} value={category}>
+                            {category}
+                          </option>
+                        ))}
+                      </select>
+                    </Field></div>
                     <Field label="Bedrag incl. btw">
                       <input
                         className="input"
@@ -4416,85 +4518,7 @@ export default function Home() {
                       </select>
                     </Field>
                     {entryForm.type === "income" && !entryUsesSplitVatLines && <InternationalVatFields value={entryForm.salesVat} onChange={(salesVat) => { setEntryVatError(""); const vatRate = salesVat.treatment === "nl" ? entryForm.vatRate : "0"; setEntryForm({ ...entryForm, salesVat, vatRate, amountInclVat: calculateInclusiveAmountInput(entryForm.amount, vatRate) }); }} />}
-                    <Field label="Status">
-                      <select
-                        className="input"
-                        value={entryForm.status}
-                        onChange={(event) => {
-                          const status = event.target.value as EntryStatus;
-                          setEntryForm({
-                            ...entryForm,
-                            status,
-                            paidDate: status === "paid" ? entryForm.paidDate || entryForm.date : "",
-                          });
-                        }}
-                      >
-                        <option value="paid">Betaald</option>
-                        <option value="open">Open</option>
-                      </select>
-                    </Field>
-                    {entryForm.status === "paid" ? (
-                      <Field label="Betaaldatum">
-                        <DutchDateInput
-                          className="input"
-
-                          value={entryForm.paidDate}
-                          onChange={(event) => setEntryForm({ ...entryForm, paidDate: event.target.value })}
-                        />
-                      </Field>
-                    ) : null}
-                    <Field label="Categorie">
-                      <select
-                        className="input"
-                        value={entryForm.category}
-                        disabled={entryUsesSplitVatLines}
-                        onChange={(event) => {
-                          const category = event.target.value;
-                          setEntryForm({
-                            ...entryForm,
-                            category,
-                            vatLines:
-                              entryForm.vatLines.length === 1
-                                ? [{ ...entryForm.vatLines[0], category }]
-                                : entryForm.vatLines,
-                            depreciationYears: category === "Investeringen" ? entryForm.depreciationYears : "none",
-                            financingPrincipal:
-                              category === loanCategory ? entryForm.financingPrincipal : "",
-                            financingInterest:
-                              category === loanCategory ? entryForm.financingInterest : "",
-                            loanInterestType:
-                              category === loanCategory ? entryForm.loanInterestType : "manual",
-                            loanAnnualRate:
-                              category === loanCategory ? entryForm.loanAnnualRate : "",
-                            loanBalanceBeforePayment:
-                              category === loanCategory ? entryForm.loanBalanceBeforePayment : "",
-                          });
-                        }}
-                      >
-                        {entryCategories[entryForm.type].map((category) => (
-                          <option key={category} value={category}>
-                            {category}
-                          </option>
-                        ))}
-                      </select>
-                    </Field>
-                  </div>
-                  {(
-                    <div className="entry-vat-lines">
-                      <div className="section-title">
-                        <div>
-                          <p className="eyebrow">2 · Factuurregels</p>
-                          <h4>Verschillende tarieven of btw-behandelingen</h4>
-                        </div>
-                        <button
-                          className="secondary-button"
-                          disabled={Boolean(editingEntryId)}
-                          onClick={addEntryVatLine}
-                          type="button"
-                        >
-                          Regel toevoegen
-                        </button>
-                      </div>
+                      </div>}
                       <div className="mt-3 grid gap-2">
                         {entryUsesSplitVatLines && entryForm.vatLines.map((line, index) => (
                           <div className="invoice-vat-line" key={line.id}>
@@ -4559,12 +4583,6 @@ export default function Home() {
                       ) : null}
                     </div>
                   )}
-                  <div className="invoice-totals" aria-live="polite">
-                    <span>Exclusief btw <strong>{money.format(entryForm.type === "income" ? entrySalesTotals.base || 0 : enteredAmount || 0)}</strong></span>
-                    <span>Btw op factuur <strong>{money.format(entryForm.type === "income" ? entrySalesTotals.vat || 0 : entryTaxVat || 0)}</strong></span>
-                    <span>Factuurtotaal <strong>{money.format(entryForm.type === "income" ? entrySalesTotals.gross || 0 : (enteredAmount || 0) + (entryTaxVat || 0))}</strong></span>
-                  </div>
-                  {retainedInvoiceVatAmount !== undefined && <p className="text-sm text-[var(--muted)]">Het btw-bedrag uit de Excel-export blijft behouden. Bij wijziging van bedrag, tarief of btw-behandeling wordt de btw opnieuw berekend.</p>}
                   {showFinancingTool ? (
                     <div className="entry-vat-lines">
                       <div className="section-title">
@@ -4683,17 +4701,49 @@ export default function Home() {
                       </span>
                     </Field>
                   )}
-                  {entryForm.type === "expense" && <div className="grid gap-3 rounded-xl border border-[var(--line)] p-4 md:grid-cols-2">
+<section className="invoice-editor-section" aria-labelledby="entry-payment-title"><h4 id="entry-payment-title">Betaling</h4><p className="invoice-section-caption">Leg vast of en wanneer deze factuur is betaald.</p><div className="invoice-payment-grid">                    <Field label="Status">
+                      <select
+                        className="input"
+                        value={entryForm.status}
+                        onChange={(event) => {
+                          const status = event.target.value as EntryStatus;
+                          setEntryForm({
+                            ...entryForm,
+                            status,
+                            paidDate: status === "paid" ? entryForm.paidDate || entryForm.date : "",
+                          });
+                        }}
+                      >
+                        <option value="paid">Betaald</option>
+                        <option value="open">Open</option>
+                      </select>
+                    </Field>
+                    {entryForm.status === "paid" ? (
+                      <Field label="Betaaldatum">
+                        <DutchDateInput
+                          className="input"
+
+                          value={entryForm.paidDate}
+                          onChange={(event) => setEntryForm({ ...entryForm, paidDate: event.target.value })}
+                        />
+                      </Field>
+                    ) : null}
+</div>                  {entryForm.type === "expense" && <details className="invoice-payment-options" open={entryForm.paymentMethod === "dga" || entryForm.wkrType !== "none"}><summary>Privé betaald en werkkostenregeling</summary><div className="mt-3 grid gap-3 md:grid-cols-2">
                     <Field label="Betaalwijze"><select className="input" value={entryForm.paymentMethod} onChange={(event) => setEntryForm({ ...entryForm, paymentMethod: event.target.value, status: event.target.value === "dga" ? "paid" : entryForm.status })}><option value="company">Zakelijke rekening / normale betaling</option><option value="dga">Rekening-courant DGA (zakelijk privé betaald)</option></select></Field>
                     {entryForm.paymentMethod === "dga" && <Field label="Naam DGA"><input className="input" required list="booking-dga-names" value={entryForm.rcDga} onChange={(event) => setEntryForm({ ...entryForm, rcDga: event.target.value })} /><datalist id="booking-dga-names">{Array.from(new Set([...active.entries.map((entry) => entry.rcDga), ...activeSalaries.map((salary) => salary.employeeName)].filter(Boolean))).map((name) => <option key={name} value={name} />)}</datalist><span className="text-xs text-[var(--muted)]">Rekening-courant wordt gecrediteerd inclusief btw op de betaaldatum. Gebruik voor privé-uitgaven via de BV het tabblad Rekening-courant DGA.</span></Field>}
                     <Field label="WKR-indeling"><select className="input" value={entryForm.wkrType} onChange={(event) => setEntryForm({ ...entryForm, wkrType: event.target.value })}><option value="none">Geen WKR</option><option value="free">Aangewezen als eindheffingsloon: vrije ruimte</option><option value="exempt">Gerichte vrijstelling</option><option value="nil">Nihilwaardering</option></select></Field>
                     {entryForm.wkrType !== "none" && !entryUsesSplitVatLines && <Field label="Fiscale WKR-waarde (optioneel)"><input className="input" inputMode="decimal" value={entryForm.wkrValue} onChange={(event) => setEntryForm({ ...entryForm, wkrValue: event.target.value })} placeholder="Standaard: bedrag inclusief btw" /><span className="text-xs text-[var(--muted)]">Bij nihilwaardering telt € 0 mee. Vul alleen een afwijkende waarde in als de fiscale waarderingsregels dit vragen.</span></Field>}
-                  </div>}
-                  <button className="primary-button mt-2 justify-center py-3 md:w-fit">
-                    {editingEntryId ? "Wijziging opslaan" : "Boeking opslaan"}
-                  </button>
-                </form>
-              </section>
+                  </div></details>}</section></div>
+<InvoiceEntrySummary type={entryForm.type} relation={entryForm.relation} invoiceNumber={useAutomaticInvoiceNumber ? nextSalesInvoiceNumber : entryForm.invoiceNumber} date={entryForm.date} status={entryForm.status} paidDate={entryForm.paidDate}
+  lineCount={entryUsesSplitVatLines ? entryForm.vatLines.length : 1}
+  base={entryForm.type === "income" ? entrySalesTotals.base || 0 : enteredAmount || 0}
+  vat={entryForm.type === "income" ? entrySalesTotals.vat || 0 : entryTaxVat || 0}
+  gross={entryForm.type === "income" ? entrySalesTotals.gross || 0 : (enteredAmount || 0) + (entryTaxVat || 0)}>
+  {retainedInvoiceVatAmount !== undefined && <p className="invoice-summary-caption">Het btw-bedrag uit de Excel-export blijft behouden. Bij wijziging van bedrag, tarief of btw-behandeling wordt de btw opnieuw berekend.</p>}
+</InvoiceEntrySummary>
+</div>
+<div className="invoice-editor-actions"><p>{active.name} · boekjaar {active.fiscalYear}</p><button className="primary-button" type="submit">{editingEntryId ? "Wijziging opslaan" : entryForm.type === "income" ? "Verkoopfactuur opslaan" : "Inkoopfactuur opslaan"}</button></div>
+</form></section>
 
               <EntryTable
                 entries={filteredEntries}
@@ -5551,6 +5601,7 @@ export default function Home() {
         </section>
       </div>
     </main>
+    {issuePending && <div className="invoice-issue-overlay" role="dialog" aria-modal="true" aria-label="Factuuruitgifte" aria-live="polite"><section className="panel"><h2>{issuingInvoice ? "Factuur vastleggen…" : "Serverbevestiging ontbreekt"}</h2><p>{issuingInvoice ? "Wacht op de serverbevestiging. Je factuur, PDF en boekingen worden samen opgeslagen." : "De factuur kan al zijn opgeslagen. Controleer hetzelfde verzoek; BoekBalans maakt daarbij geen dubbele factuur."}</p>{!issuingInvoice && <button autoFocus className="primary-button mt-4" onClick={() => { const attempt = invoiceIssueAttempt.current; if (attempt) void issueSalesInvoice(attempt.draft).catch(() => {}); }}>Uitgifte opnieuw controleren</button>}</section></div>}
     {quickContact && quickContact.administrationId === active.id && <QuickContactDialog key={`${quickContact.administrationId}-${quickContact.target}-${quickContact.draftId || "entry"}`} initialName={quickContact.initialName} role={quickContact.role} contacts={active.contacts} onSave={saveQuickContact} onSelect={selectQuickContact} onClose={() => setQuickContact(null)} />}
     </>
   );
