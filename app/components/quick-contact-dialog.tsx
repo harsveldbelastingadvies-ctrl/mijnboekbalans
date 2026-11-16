@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { KvkContactSearch } from "./kvk-contact-search";
 import { ContactFields } from "./contact-fields";
 import { contactKindLabel, emptyContact, matchingContacts, type Contact, type ContactDraft, type ContactRole } from "../lib/contacts";
 
@@ -30,7 +31,7 @@ export function QuickContactDialog({ initialName, role, contacts, onSave, onSele
       <div className="section-title"><div><p className="eyebrow">Tijdens het inboeken</p><h2 id="quick-contact-title">{role === "customer" ? "Debiteur toevoegen" : "Leverancier toevoegen"}</h2></div><button type="button" className="icon-button" aria-label="Sluiten" onClick={onClose}>×</button></div>
       <p id="quick-contact-description" className="my-4 text-sm text-[var(--muted)]">Je factuur blijft ingevuld. Na opslaan wordt deze relatie direct geselecteerd.</p>
       <form onSubmit={submit} className="grid gap-4">
-        <ContactFields value={form} onChange={(value) => { setForm(value); setError(""); }} focusName fixedRole />
+        <ContactFields value={form} onChange={(value) => { setForm(value); setError(""); }} focusName fixedRole businessSearch={<KvkContactSearch initialQuery={initialName} onSelect={result => { setForm(current => current.kind === "private" ? current : { ...current, name: result.name || current.name, kvk: result.kvk || current.kvk, address: result.address || current.address }); setError(""); }} />} />
         {existing.length > 0 && <div className="notice"><p className="text-sm font-semibold">Deze naam staat al in je adresboek</p>{existing.map((contact) => <div key={contact.id} className="mt-2 grid gap-1 text-sm"><span>{contact.name} · {contactKindLabel(contact)}{contact.address ? ` · ${contact.address}` : ""}</span><button className="secondary-button" type="button" onClick={() => onSelect(contact)}>{contact.type === role || contact.type === "entrepreneur" ? "Gebruik bestaande relatie" : role === "customer" ? "Ook gebruiken als debiteur" : "Ook gebruiken als leverancier"}</button></div>)}</div>}
         {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
         <div className="flex flex-wrap justify-between gap-3"><button className="secondary-button" type="button" onClick={onClose}>Annuleren</button><button className="primary-button" type="submit">Opslaan en selecteren</button></div>
