@@ -97,7 +97,7 @@ type WorkspaceRequest =
     }
   | { action: "login"; pin: string }
   | { action: "issueSalesInvoice"; pin:string; revision:string; administrationId:string; draft:SalesInvoiceDraft }
-  | { action: "save"; pin: string; administrations: Administration[]; revision?: string }
+  | { action: "save"; pin: string; administrations: Administration[]; revision?: string; purchaseVatVersion?: number }
   | { action: "history"; pin: string }
   | { action: "snapshot"; pin: string; revision: string; administrationId: string };
 
@@ -241,6 +241,8 @@ async function handlePost(request: NextRequest) {
     if (!isValidAdministrationList(body.administrations)) {
       return json({ error: "Administraties zijn niet geldig." }, 400);
     }
+
+    if ([...store.administrations, ...body.administrations].some(a => a.entries.some(e => e.purchaseVat === "nl_reverse")) && body.purchaseVatVersion !== 1) return json({ error: "Deze werkruimte bevat inkoopfacturen met verlegde btw. Ververs BoekBalans voordat je wijzigingen opslaat, zodat de btw-behandeling behouden blijft.", code: "UPDATE_REQUIRED" }, 428);
 
     const issuedError=issuedInvoiceChangesError(store.administrations,body.administrations);
     if(issuedError)return json({error:issuedError,code:"ISSUED_INVOICE_LOCKED"},409);

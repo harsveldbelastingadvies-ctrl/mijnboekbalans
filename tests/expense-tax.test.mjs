@@ -69,3 +69,14 @@ test("saving/editing is idempotent; JSON snapshots, DGA current account and WKR 
   assert.equal(deductibleExpenseVat(normal), 5.06);
   assert.equal(normal.inputVatBlocked, false);
 });
+
+test("reverse-charge expense preparation preserves supplier VAT zero and deductible self-assessed VAT",()=>{
+  const raw=row({amount:1000,vatRate:21,purchaseVat:'nl_reverse'});
+  const result=prepareExpenseTaxLines([raw],'standard','',false,0,100,1000)[0];
+  assert.equal(result.inputVatAmount,0);assert.equal(deductibleExpenseVat(result),210);assert.equal(companyCashAmount(result),1000);
+  const blocked=prepareExpenseTaxLines([raw],'manual','Niet aftrekbaar',true,100,0,1000)[0];
+  assert.equal(blocked.inputVatAmount,0);assert.equal(deductibleExpenseVat(blocked),0);assert.equal(blocked.nonDeductibleAmount,100);
+  const mixed=prepareExpenseTaxLines([raw,row({id:'low',amount:100,vatRate:9,purchaseVat:'nl_reverse'})],'standard','');
+  assert.equal(mixed.reduce((s,e)=>s+deductibleExpenseVat(e),0),219);
+  assert.equal(mixed.reduce((s,e)=>s+companyCashAmount(e),0),1100);
+});

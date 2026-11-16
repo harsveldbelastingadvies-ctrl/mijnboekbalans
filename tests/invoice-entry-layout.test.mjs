@@ -26,3 +26,17 @@ test("split VAT, editing and special purchase payment controls remain available"
   purchase.context.entryForm.wkrType = "free"; purchase.context.activeSalaries = []; purchase.context.editingEntryId = "entry-1";
   html = renderToStaticMarkup(purchase.render()); assert.match(html, /Wijziging opslaan/); assert.match(html, /Naam DGA/); assert.match(html, /Fiscale WKR-waarde/); assert.match(html, /<details[^>]*open/);
 });
+
+test("reverse-charge purchase preview separates supplier total from self-assessed VAT", () => {
+  const fixture=invoiceFixture("expense");
+  fixture.context.entryForm.purchaseVat="nl_reverse";
+  fixture.context.entryForm.amountInclVat="100,00";
+  fixture.context.entryTaxVat=21;
+  const html=renderToStaticMarkup(fixture.render());
+  assert.match(html,/Btw verlegd naar mijn cliënt/);
+  assert.match(html,/Rekentarief verlegde btw/);
+  assert.match(html,/Zelf aangegeven btw \(2a\)/);
+  assert.match(html,/Aftrekbare voorbelasting \(5b\)/);
+  assert.match(html,/€(?: |&#xA0;|&#160;|\s)100,00/);
+  assert.doesNotMatch(html,/€(?: |&#xA0;|&#160;|\s)121,00/);
+});

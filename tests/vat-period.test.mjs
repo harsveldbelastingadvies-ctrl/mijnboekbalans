@@ -116,3 +116,40 @@ test("restaurant costs, fiscal add-back, open balance and VAT PDF overview recon
   assert.equal(months[8].vatBalance, 0);
   assert.equal(months[8].vatReserve, 0);
 });
+
+test("domestic reverse-charge invoice reports 2a and 5b without increasing supplier debt or cash", () => {
+  const reverse = entry({ purchaseVat: "nl_reverse", amount: 1000, inputVatAmount: 0 });
+  const totals = context.calculateTotals([reverse]);
+  assert.equal(totals.vatToPay, 210); assert.equal(totals.vatToClaim, 210);
+  assert.equal(totals.costs, 1000); assert.equal(totals.open, 1000);
+  assert.equal(invoicedVat(reverse), 0); assert.equal(companyCashAmount(reverse), 1000);
+  const overview = context.buildVatOverview([reverse]);
+  assert.equal(overview.international.rubrics.find(r=>r.code==='2a').basis,1000);
+  assert.equal(overview.international.rubrics.find(r=>r.code==='2a').vat,210);
+  assert.equal(overview.vatDueTotal,210);assert.equal(overview.deductibleInputVatTotal,210);assert.equal(overview.vatBalance,0);
+  const months=context.buildMonthlyFinancialOverview([{...reverse,status:'paid'}],2026);
+  assert.equal(months[1].paidExpensesInclVat,1000);assert.equal(months[1].vatBalance,0);
+});
+test("reverse-charge liability remains payable with limited or no deduction; credit reverses both sides",()=>{
+  for(const percent of [0,50,100]) {
+    for(const sign of [1,-1]) {
+      const reverse=entry({purchaseVat:'nl_reverse',amount:sign*1000,inputVatAmount:0});
+      const totals=context.calculateTotals([reverse],percent),overview=context.buildVatOverview([reverse],percent);
+      assert.equal(totals.vatToPay,sign*210);assert.equal(totals.vatToClaim,(sign*210*percent/100)||0);
+      assert.equal(totals.costs,sign*(1000+210*(1-percent/100)));assert.equal(totals.open,sign*1000);
+      assert.equal(overview.vatBalance,(sign*210*(1-percent/100))||0);
+    }
+  }
+  const blocked=entry({purchaseVat:'nl_reverse',amount:1000,inputVatBlocked:true});
+  assert.equal(context.calculateTotals([blocked]).costs,1210);assert.equal(context.calculateTotals([blocked]).vatToClaim,0);
+  assert.match(deferredVatError([],[{...blocked,vatDate:'2026-07-01'}]),/oorspronkelijke tijdvak/);
+});
+
+test("spendable cash reserves do not reclaim self-assessed purchase VAT without its liability",()=>{
+  const sale=entry({id:'sale',type:'income',date:'2026-02-01',status:'paid',amount:100});
+  const reverse=entry({purchaseVat:'nl_reverse',amount:1000,status:'paid'});
+  const full=context.buildMonthlySpendableOverview([sale,reverse],2026,100);
+  assert.equal(full[1].vatReserve,21);assert.equal(full[1].paidExpensesInclVat,1000);
+  const blocked=context.buildMonthlySpendableOverview([sale,{...reverse,status:'open',inputVatBlocked:true}],2026,100);
+  assert.equal(blocked[1].vatReserve,231);assert.equal(blocked[1].openExpenseInclVat,1000);
+});

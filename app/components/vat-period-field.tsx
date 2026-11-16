@@ -2,10 +2,11 @@ import { formatDutchDate } from "../lib/dutch-date";
 import { DutchDateInput } from "./dutch-date-input";
 import { resolveVatDate, vatDateError, type VatPeriod } from "../lib/vat-period";
 
-export function VatPeriodField({ date, selection, year, period, onChange }: {
+export function VatPeriodField({ date, selection, year, period, onChange, reverseCharge = false }: {
   date: string; selection?: string; year: number; period: VatPeriod;
-  onChange: (value: string) => void;
+  reverseCharge?: boolean; onChange: (value: string) => void;
 }) {
+  if (reverseCharge) return <div className="grid gap-2 text-sm font-semibold"><label>Btw-datum verlegging<input className="input" value={formatDutchDate(date)} readOnly /></label><span className="text-xs font-normal text-[var(--muted)]">Verlegde btw en de bijbehorende voorbelasting volgen het oorspronkelijke tijdvak. Verwerk een vergeten factuur via de toepasselijke correctie-/suppletieroute.</span></div>;
   const vatDate = resolveVatDate("expense", date, selection, year, period);
   const error = vatDateError("expense", date, vatDate);
   return <div className="grid gap-2 text-sm font-semibold text-[var(--ink)]">

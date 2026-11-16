@@ -1,5 +1,6 @@
 import { deductibleExpenseVat } from "./expense-tax.ts";
 export type VatDatedEntry = {
+  purchaseVat?: "nl_reverse" | "";
   inputVatBlocked?: boolean;
   inputVatAmount?: number;
   expenseTaxRule?: "standard" | "restaurant_ib" | "restaurant_vpb" | "manual";
@@ -66,6 +67,7 @@ export function isDeferredVat(entry: VatDatedEntry) {
 // Aggregate all shifted purchase lines in the affected target quarter, including credit notes.
 // Other corrections must also be considered by the preparer; these are not tracked here.
 export function deferredVatError(existing: VatDatedEntry[], additions: VatDatedEntry[], deductionPercent = 100) {
+  if (additions.some(e => e.type === "expense" && e.purchaseVat === "nl_reverse" && getVatDate(e) !== e.date)) return "Verwerk naar je cliënt verlegde btw in het oorspronkelijke tijdvak. Kies de factuurdatum als btw-datum en beoordeel zo nodig een correctie/suppletie.";
   const targets = new Set(additions.filter(isDeferredVat).map((entry) => `${getVatDate(entry).slice(0, 4)}-q${quarter(getVatDate(entry))}`));
   for (const target of targets) {
     const amount = [...existing, ...additions].filter((entry) => isDeferredVat(entry) &&
