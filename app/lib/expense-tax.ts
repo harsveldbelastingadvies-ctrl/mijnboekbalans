@@ -1,4 +1,4 @@
-import { invoicedVat, type SalesEntry } from "./international-vat.ts";
+import { invoicedVat, dutchVat, type SalesEntry } from "./international-vat.ts";
 export type ExpenseTaxRule = "standard" | "restaurant_ib" | "restaurant_vpb" | "manual";
 export const expenseTaxOptions = [
   ["standard", "Geen extra fiscale correctie"],
@@ -14,13 +14,13 @@ export function expenseVatBlocked(entry: ExpenseTaxFields) {
 }
 export function deductibleExpenseVat(entry: SalesEntry & ExpenseTaxFields, percent = 100) {
   if (entry.type !== "expense" || entry.balanceOnly || entry.salaryRecordId || entry.payrollDeclarationId || expenseVatBlocked(entry)) return 0;
-  return invoicedVat(entry) * Math.max(0, Math.min(100, percent)) / 100;
+  return dutchVat(entry) * Math.max(0, Math.min(100, percent)) / 100;
 }
-export function expenseTaxPreview(base: number, vat: number, rule: ExpenseTaxRule, blocked = false, manual = 0, deductionPercent = 100) {
+export function expenseTaxPreview(base: number, vat: number, rule: ExpenseTaxRule, blocked = false, manual = 0, deductionPercent = 100, reverseCharge = false) {
   const deductibleVat = isRestaurant(rule) || blocked ? 0 : vat * Math.max(0, Math.min(100, deductionPercent)) / 100;
   const cost = expenseCents(base + vat - deductibleVat);
   const correction = isRestaurant(rule) ? expenseCents(cost * (rule === "restaurant_ib" ? 0.2 : 0.265)) : rule === "manual" ? manual : 0;
-  return { gross: expenseCents(base + vat), vat, deductibleVat, cost, correction, deductibleCost: expenseCents(cost - correction) };
+  return { gross: expenseCents(base + (reverseCharge ? 0 : vat)), vat, deductibleVat, cost, correction, deductibleCost: expenseCents(cost - correction) };
 }
 export function expenseTaxError(rule: ExpenseTaxRule, amount: number, note: string, manual = 0, maxCost = amount) {
   if (!expenseTaxOptions.some(([key]) => key === rule)) return "Kies een geldige fiscale kostenbehandeling.";
@@ -30,9 +30,9 @@ export function expenseTaxError(rule: ExpenseTaxRule, amount: number, note: stri
 }
 // Allocate one invoice-level correction; keep its cent remainder on the last line.
 export function prepareExpenseTaxLines<T extends SalesEntry>(lines: T[], rule: ExpenseTaxRule, note: string, blocked = false, manual = 0, deductionPercent = 100, receiptGross?: number) {
-  const withVat = lines.map((line) => ({ ...line, inputVatAmount: receiptGross !== undefined && lines.length === 1
+  const withVat = lines.map((line) => ({ ...line, inputVatAmount: line.purchaseVat !== "nl_reverse" && receiptGross !== undefined && lines.length === 1
     ? expenseCents(receiptGross - line.amount) : expenseCents(invoicedVat(line)), inputVatBlocked: isRestaurant(rule) || blocked, expenseTaxRule: rule }));
-  const costs = withVat.map((line) => expenseTaxPreview(line.amount, line.inputVatAmount, rule, line.inputVatBlocked, 0, deductionPercent).cost);
+  const costs = withVat.map((line) => expenseTaxPreview(line.amount, dutchVat(line), rule, line.inputVatBlocked, 0, deductionPercent).cost);
   const totalCost = expenseCents(costs.reduce((sum, value) => sum + value, 0));
   const totalCorrection = expenseTaxPreview(totalCost, 0, rule, true, manual, deductionPercent).correction;
   let allocated = 0;

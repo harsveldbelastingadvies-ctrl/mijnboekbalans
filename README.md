@@ -581,3 +581,11 @@ Eerste versie: EUR, Nederlandse afzender met btw-id, positieve bedragen, 21%, 9%
 Validatie omvat afronding per btw-tarief, gelijktijdige uitgifte, idempotent opnieuw proberen, terugrollen bij een mislukte PDF-opslag, PIN-controle en bescherming tegen verlies via oudere clients. Visuele controle gebruikt uitsluitend fictieve gegevens; er worden geen echte klantfacturen uitgegeven tijdens testen.
 
 De PDF volgt een rustige briefindeling: klantadres bovenaan, factuurgegevens daaronder, een tabel met Omschrijving/Totaal, rechts uitgelijnde subtotaal-/btw-regels en daarna betaaltekst en persoonlijke afsluiting. Aantallen en prijsdetails verschijnen waar nodig onder de omschrijving. Afzendergegevens blijven compact onderaan iedere pagina staan. De betaaltekst volgt de gekozen vervaldatum; veertien dagen wordt uitgeschreven. Reeds uitgegeven PDF's blijven als originele bytes bewaard.
+
+### Naar cliënt verlegde btw op binnenlandse inkopen
+
+Handmatige en ingelezen inkoopfacturen hebben de keuze **Btw verlegd naar mijn cliënt · binnenland (2a)**. Kies 21% of 9% als rekentarief; de keuze geldt voor alle regels van de factuur. Het optionele veld `purchaseVat: "nl_reverse"` bewaart de classificatie. Bestaande boekingen worden niet automatisch aangepast. Buitenlandse inkopen (4a/4b) en één factuur met zowel gewone als verlegde regels vallen buiten deze keuze; boek zulke delen afzonderlijk via hun passende verwerking.
+
+`invoicedVat` houdt de leveranciers-btw op nul, zodat open posten, betalingen en rekening-courant het factuurbedrag zonder zelf berekende btw volgen. `dutchVat` berekent de naar de afnemer verlegde belasting. Die komt als verschuldigd in 2a en alleen volgens het aftrekrecht in 5b. Geblokkeerde/gedeeltelijk niet-aftrekbare btw telt mee als kosten. Creditnota's en regels met verschillende rekentarieven behouden hun teken en tarief. Overzichten, aangiftecontrole/PDF en btw-reservering nemen beide kanten mee. Deze verlegging kan niet als gewone vergeten voorbelasting naar een later tijdvak worden doorgeschoven.
+
+Een oudere client zonder `purchaseVatVersion: 1` mag een werkruimte met deze boekingen niet opslaan. Zo kan een oud openstaand tabblad bij bewerken niet stilzwijgend de verleggingsmarkering verliezen; de server vraagt dan de app te verversen. Bestaande revisiecontrole en herstelkopieën blijven actief.

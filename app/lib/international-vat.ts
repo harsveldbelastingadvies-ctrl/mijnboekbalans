@@ -80,20 +80,22 @@ export function salesVatError(details: SalesVatDetails | undefined, amount: numb
   }
   return "";
 }
-export type SalesEntry = { invoiceVatAmount?: number; inputVatAmount?: number; type: "income" | "expense"; amount: number; vatRate: number; date: string; relation?: string; invoiceNumber?: string; salesVat?: SalesVatDetails; balanceOnly?: boolean; salaryRecordId?: string; payrollDeclarationId?: string };
+export type SalesEntry = { purchaseVat?: "nl_reverse" | ""; invoiceVatAmount?: number; inputVatAmount?: number; type: "income" | "expense"; amount: number; vatRate: number; date: string; relation?: string; invoiceNumber?: string; salesVat?: SalesVatDetails; balanceOnly?: boolean; salaryRecordId?: string; payrollDeclarationId?: string };
 export function invoicedVat(entry: SalesEntry) {
   if (entry.balanceOnly) return 0;
+  if (entry.type === "expense" && entry.purchaseVat === "nl_reverse") return 0;
   if (entry.type === "expense" && entry.inputVatAmount !== undefined) return entry.inputVatAmount;
   if (entry.type === "income" && entry.salesVat && entry.salesVat.treatment !== "nl") return isForeignVat(entry.salesVat.treatment) ? entry.salesVat.foreignVatAmount : 0;
   if (entry.type === "income" && Number.isFinite(entry.invoiceVatAmount)) return entry.invoiceVatAmount!;
   return entry.amount * entry.vatRate / 100;
 }
 export function dutchVat(entry: SalesEntry) {
+  if (entry.type === "expense" && entry.purchaseVat === "nl_reverse" && !entry.balanceOnly && !entry.salaryRecordId && !entry.payrollDeclarationId) return Math.sign(entry.amount) * Math.round((Math.abs(entry.amount * entry.vatRate / 100) + Number.EPSILON) * 100) / 100;
   return usesDutchSalesVat(entry) ? invoicedVat(entry) : 0;
 }
 export function buildInternationalVat(entries: SalesEntry[]) {
   const selected = entries.filter((entry) => entry.type === "income" && !entry.balanceOnly && !entry.salaryRecordId && !entry.payrollDeclarationId);
-  const rubrics = ["1a", "1b", "1e", "3a", "3b", "3c"].map((code) => ({ code, basis: 0, vat: 0 }));
+  const rubrics = ["1a", "1b", "1e", "2a", "3a", "3b", "3c"].map((code) => ({ code, basis: 0, vat: 0 }));
   const icp = new Map<string, { country: string; vatId: string; goods: number; services: number }>();
   const foreign = new Map<string, { country: string; route: string; basis: number; vat: number }>();
   const excluded: SalesEntry[] = [];
@@ -116,6 +118,8 @@ export function buildInternationalVat(entries: SalesEntry[]) {
       row.basis += entry.amount; row.vat += details.foreignVatAmount; foreign.set(key, row);
     }
   }
+  const reverse = rubrics.find(row => row.code === "2a")!;
+  for (const entry of entries.filter(e => e.type === "expense" && e.purchaseVat === "nl_reverse" && !e.balanceOnly && !e.salaryRecordId && !e.payrollDeclarationId)) { reverse.basis += entry.amount; reverse.vat += dutchVat(entry); }
   const icpRows = [...icp.values()].sort((a, b) => `${a.country}${a.vatId}`.localeCompare(`${b.country}${b.vatId}`));
   const icpTotal = icpRows.reduce((sum, row) => sum + row.goods + row.services, 0);
   return { rubrics, icpRows, icpTotal, icpDifference: Math.round((icpTotal - (rubrics.find((row) => row.code === "3b")?.basis ?? 0)) * 100) / 100,

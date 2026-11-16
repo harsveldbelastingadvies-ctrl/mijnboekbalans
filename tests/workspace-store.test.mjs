@@ -169,3 +169,15 @@ test("authenticated API issues one invoice, retries safely and rejects deleting 
   assert.equal(blocked.status,409);assert.equal(blocked.body.code,"ISSUED_INVOICE_LOCKED");
   const login=await api.post({action:"login",pin:"123456"});assert.equal(login.body.administrations[0].issuedSalesInvoices.length,1);
 });
+
+test("an old client cannot discard a purchase reverse-charge classification after logging in again", async()=>{
+  const db=database(),api=await workspaceApi(db),admin=salesAdmin();
+  admin.entries=[{id:'reverse',type:'expense',date:'2026-02-15',amount:1000,vatRate:21,purchaseVat:'nl_reverse',inputVatAmount:0,status:'open',relation:'Leverancier',description:'Onderaanneming',category:'Kosten'}];
+  const setup=await api.post({action:'setup',workspaceName:'Voorbeeld',email:'test@example.invalid',pin:'123456',administrations:[admin]});
+  assert.equal(setup.status,200);
+  const outdated=structuredClone([admin]);delete outdated[0].entries[0].purchaseVat;
+  const old=await api.post({action:'save',pin:'123456',revision:setup.body.revision,administrations:outdated});
+  assert.equal(old.status,428);assert.equal(old.body.code,'UPDATE_REQUIRED');
+  const kept=await api.post({action:'login',pin:'123456'});assert.equal(kept.body.administrations[0].entries[0].purchaseVat,'nl_reverse');
+  const fresh=await api.post({action:'save',pin:'123456',revision:kept.body.revision,purchaseVatVersion:1,administrations:[admin]});assert.equal(fresh.status,200);
+});
