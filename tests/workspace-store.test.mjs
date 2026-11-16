@@ -7,6 +7,9 @@ import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import vm from "node:vm";
 import ts from "typescript";
+import { salesAdmin, salesDraft } from "./helpers/sales-invoice-fixture.mjs";
+import * as issuedFunctions from "../app/lib/issued-sales-invoices.ts";
+import * as issueFunctions from "../app/lib/issue-sales-invoice.ts";
 import * as storeFunctions from "../app/lib/workspace-store.ts";
 import { readWorkspace, writeWorkspace, listWorkspaceHistory, readWorkspaceHistory, workspaceRevision, historyLimit } from "../app/lib/workspace-store.ts";
 
@@ -103,6 +106,8 @@ async function workspaceApi(db) {
       if (name === "next/server") return { NextResponse: { json: (data, init) => new Response(JSON.stringify(data), init) } };
       if (name === "@opennextjs/cloudflare") return { getCloudflareContext: () => ({ env: { DB: db } }) };
       if (name.includes("workspace-store")) return storeFunctions;
+      if (name.includes("issued-sales-invoices")) return issuedFunctions;
+      if (name.includes("issue-sales-invoice")) return issueFunctions;
       return nativeRequire(name);
     },
   });
@@ -144,4 +149,23 @@ test("production API reports unavailable database instead of silently using a di
   const api = await workspaceApi(null);
   assert.equal((await api.GET()).status, 503);
   assert.equal((await api.post({ action: "login", pin: "123456" })).status, 503);
+});
+
+
+test("authenticated API issues one invoice, retries safely and rejects deleting its records through an ordinary save", async () => {
+  const db=database(),api=await workspaceApi(db),draft=salesDraft();
+  const setup=await api.post({action:"setup",workspaceName:"Voorbeeld",email:"example@example.invalid",pin:"123456",administrations:[salesAdmin()]});
+  assert.equal(setup.status,200);
+  const request={action:"issueSalesInvoice",pin:"123456",revision:setup.body.revision,administrationId:"demo",draft};
+  assert.equal((await api.post({...request,pin:"000000"})).status,401);
+  assert.equal((await api.post({...request,draft:{...draft,customerName:""}})).status,400);
+  const issued=await api.post(request);assert.equal(issued.status,200);
+  assert.equal(issued.body.administrations[0].issuedSalesInvoices.length,1);
+  assert.equal(issued.body.administrations[0].entries.length,3);
+  assert.equal(JSON.stringify(issued.body).includes("pinHash"),false);
+  const retry=await api.post(request);assert.equal(retry.status,200);assert.equal(retry.body.invoiceId,issued.body.invoiceId);
+  const dropped=issued.body.administrations.map(a=>({...a,issuedSalesInvoices:[]}));
+  const blocked=await api.post({action:"save",pin:"123456",revision:issued.body.revision,administrations:dropped});
+  assert.equal(blocked.status,409);assert.equal(blocked.body.code,"ISSUED_INVOICE_LOCKED");
+  const login=await api.post({action:"login",pin:"123456"});assert.equal(login.body.administrations[0].issuedSalesInvoices.length,1);
 });

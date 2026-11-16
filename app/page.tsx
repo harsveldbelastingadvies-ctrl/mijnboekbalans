@@ -3,6 +3,8 @@ import { formatDutchDate, formatDutchTimestamp } from "./lib/dutch-date";
 import { DutchDateInput } from "./components/dutch-date-input";
 import { WorkspaceHistoryPanel } from "./components/workspace-history-panel";
 import { SpreadsheetInvoiceImport } from "./components/spreadsheet-invoice-import";
+import { SalesInvoicePanel } from "./components/sales-invoice-panel";
+import type { SalesInvoiceDraft, IssuedSalesInvoice, InvoiceParty } from "./lib/issued-sales-invoices";
 import { InvoiceEntrySummary } from "./components/invoice-entry-summary";
 import type { BankReconciliationInput } from "./components/bank-payment-panel";
 import { reconcileBankPayments, unlinkBankPayment, type BankStatement } from "./lib/bank-reconciliation";
@@ -56,6 +58,7 @@ type EntryStatus = "paid" | "open";
 type LoanInterestType = "manual" | "nominal" | "effective";
 type ZvwContributionType = "dga_contribution" | "employer_levy";
 type TabKey =
+  | "salesInvoices"
   | "clients"
   | "documents"
   | "filings"
@@ -75,6 +78,7 @@ type PeriodKey = "year" | "q1" | "q2" | "q3" | "q4";
 type WorkspaceState = "checking" | "setup" | "locked" | "unlocked";
 
 type Entry = AccountingEntryFields & {
+  issuedInvoiceId?: string;
   bankPayments?: Array<{ transactionId: string; date: string; amount: number; vatAmount: number }>;
   bankPaymentIds?: string[];
   invoiceVatAmount?: number;
@@ -161,6 +165,10 @@ type InvoiceDraft = {
 };
 
 type Administration = {
+  issuedSalesInvoices?: IssuedSalesInvoice[];
+  salesInvoiceDraft?: SalesInvoiceDraft;
+  salesInvoiceIssuer?: InvoiceParty;
+  salesInvoiceClosing?: string;
   bankStatements?: BankStatement[];
   email?: string;
   phone?: string;
@@ -2423,6 +2431,11 @@ function buildPayrollOverviewPdf(admin: Administration, salaries: SalaryRecord[]
 export default function Home() {
   const [administrations, setAdministrations] = useState<Administration[]>(starterData);
   const [activeId, setActiveId] = useState(starterData[0].id);
+  const [issuingInvoice, setIssuingInvoice] = useState(false);
+  const [issuePending, setIssuePending] = useState(false);
+  const [invoiceSession, setInvoiceSession] = useState(0);
+  const invoiceIssueAttempt = useRef<{ id: string; revision: string; draft: SalesInvoiceDraft } | null>(null);
+  const issueInFlight = useRef(false);
   const [tab, setTab] = useState<TabKey>("clients");
   const [hydrated, setHydrated] = useState(false);
   const [entryForm, setEntryForm] = useState(emptyEntry);
@@ -2515,7 +2528,7 @@ export default function Home() {
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (sync.current?.dirty) { event.preventDefault(); event.returnValue = ""; }
+      if (sync.current?.dirty || invoiceIssueAttempt.current) { event.preventDefault(); event.returnValue = ""; }
     };
     const retry = () => { void sync.current?.flush(); };
     const hide = () => { if (document.visibilityState === "hidden") void sync.current?.flush(); };
@@ -3699,6 +3712,7 @@ export default function Home() {
   };
 
   const removeEntry = (entryId: string) => {
+    if (active.entries.find(e => e.id === entryId)?.issuedInvoiceId) { setTab("salesInvoices"); setSaveStatus("Een definitieve verkoopfactuur blijft bewaard. Verwerk de betaling of maak een afzonderlijke correctie."); return; }
     if (active.entries.find((entry) => entry.id === entryId)?.bankPaymentIds?.length) { setEntryVatError("Ontkoppel eerst de bijbehorende bankbetaling bij Facturen inlezen voordat je deze boeking verwijdert."); return; }
     const linkedSalary = activeSalaries.find(s => s.id === active.entries.find(e => e.id === entryId)?.salaryRecordId);
     if (linkedSalary) { setTab(linkedSalary.employeePayroll ? "employeePayroll" : "payroll"); return; }
@@ -3741,6 +3755,7 @@ export default function Home() {
   };
 
   const editEntry = (entry: Entry) => {
+    if (entry.issuedInvoiceId) { setTab("salesInvoices"); setSaveStatus("Deze boeking hoort bij een definitieve verkoopfactuur en kan niet worden gewijzigd."); return; }
     if (entry.payrollDeclarationId) { setTab("payrollTax"); return; }
     if (entry.balanceOnly && entry.rcDga) { setTab("rc"); return; }
     if (entry.salaryRecordId) { setTab(activeSalaries.find(s => s.id === entry.salaryRecordId)?.employeePayroll ? "employeePayroll" : "payroll"); return; }
@@ -3853,6 +3868,7 @@ export default function Home() {
 
   const beginWorkspaceSession = (data: WorkspaceResponse, pin: string) => {
     if (!data.administrations?.length || !data.profile || !data.revision) throw new Error("De server heeft geen volledige werkruimte teruggegeven. Je lokale kopie is behouden.");
+    invoiceIssueAttempt.current = null; setIssuePending(false); setInvoiceSession(n => n + 1);
     const sessionKey = `${recoveryPrefix}${uid()}`;
     pendingCacheKey.current = sessionKey;
     let confirmedCache = JSON.stringify(data.administrations);
@@ -3898,6 +3914,35 @@ export default function Home() {
     setSyncState("saved");
     setWorkspaceState("unlocked");
     setSaveStatus("Opgeslagen op server");
+  };
+
+  const issueSalesInvoice = async (draft: SalesInvoiceDraft) => {
+    if (issueInFlight.current) throw new Error("De factuur wordt al verwerkt.");
+    if (!invoiceIssueAttempt.current) {
+      if (!sync.current?.matchesConfirmed(administrations) || syncState !== "saved" || JSON.stringify(active.salesInvoiceDraft) !== JSON.stringify(draft)) throw new Error("Sla het concept op en wacht op bevestiging van de server.");
+      invoiceIssueAttempt.current = { id: draft.id, revision: sync.current.revisionToken, draft };
+      setIssuePending(true);
+      sync.current.stop();
+    }
+    const attempt = invoiceIssueAttempt.current;
+    if (attempt.id !== draft.id) throw new Error("Controleer eerst de uitgifte van het vorige concept.");
+    const adminId = active.id;
+    issueInFlight.current = true; setIssuingInvoice(true);
+    try {
+      const data = await workspaceRequest({ action: "issueSalesInvoice", pin: workspacePin, revision: attempt.revision, administrationId: adminId, draft: attempt.draft });
+      beginWorkspaceSession(data, workspacePin); setActiveId(adminId); setTab("salesInvoices"); invoiceIssueAttempt.current = null;
+    } catch (error) {
+      // Only an explicit rejection is safe to reopen for editing. A lost response may already have committed.
+      if (error instanceof WorkspaceSaveError && ["INVOICE_INVALID", "REVISION_CONFLICT"].includes(error.code)) {
+        try {
+          const current = await workspaceRequest({ action: "login", pin: workspacePin });
+          beginWorkspaceSession(current, workspacePin); setActiveId(adminId); invoiceIssueAttempt.current = null;
+        } catch { throw new WorkspaceSaveError("De uitgifte kon niet worden gecontroleerd. Probeer hetzelfde verzoek opnieuw.", "ISSUE_UNCERTAIN"); }
+        throw error;
+      }
+      setSyncState("conflict"); setSaveStatus("Uitgifte nog niet bevestigd. Controleer hetzelfde verzoek bij Verkoopfacturen maken.");
+      throw new WorkspaceSaveError("De uitgifte is nog niet bevestigd. Gebruik ‘Uitgifte opnieuw controleren’.", "ISSUE_UNCERTAIN");
+    } finally { issueInFlight.current = false; setIssuingInvoice(false); }
   };
 
   const setupWorkspace = async (event: FormEvent<HTMLFormElement>) => {
@@ -4114,13 +4159,13 @@ export default function Home() {
 
   return (
     <>
-    <main className="app-shell min-h-screen bg-[var(--surface)] text-[var(--ink)]">
+    <main inert={issuePending || undefined} className="app-shell min-h-screen bg-[var(--surface)] text-[var(--ink)]">
       <div className="grid min-h-screen workspace-layout">
         <aside className="workspace-sidebar">
           <button className="workspace-brand" onClick={() => setTab("clients")}><span className="brand-mark">B<span>·</span>B</span><span><strong>BoekBalans</strong><small>Helder in je administratie.</small></span></button>
           <div className="sidebar-section"><span>WERKRUIMTE</span><button className={`sidebar-link ${tab === "clients" ? "is-active" : ""}`} onClick={() => setTab("clients")}><i>▦</i> Klanten & administraties</button></div>
           <div className="sidebar-section"><span>ACTIEVE ADMINISTRATIE</span><select className="sidebar-client-select" aria-label="Wissel administratie" value={active.id} onChange={(event) => openAdministration(event.target.value)}>{administrations.map((admin) => <option key={admin.id} value={admin.id}>{admin.name}</option>)}</select></div>
-          <nav aria-label="Administratie" className="sidebar-section">{[["overview", "Overzicht", "01"], ["entries", "Boekingen", "02"], ["invoices", "Facturen inlezen", "03"], ["documents", "Documenten", "04"], ["filings", "Aangiftewerkruimte", "05"], ["contacts", "Klanten & leveranciers", "06"]].map(([key,label,icon]) => <button key={key} className={`sidebar-link ${tab === key ? "is-active" : ""}`} onClick={() => setTab(key as TabKey)}><i>{icon}</i>{label}</button>)}</nav>
+          <nav aria-label="Administratie" className="sidebar-section">{[["overview", "Overzicht", "01"], ["entries", "Boekingen", "02"], ["invoices", "Facturen inlezen", "03"], ["salesInvoices", "Verkoopfacturen maken", "+"], ["documents", "Documenten", "04"], ["filings", "Aangiftewerkruimte", "05"], ["contacts", "Klanten & leveranciers", "06"]].map(([key,label,icon]) => <button key={key} className={`sidebar-link ${tab === key ? "is-active" : ""}`} onClick={() => setTab(key as TabKey)}><i>{icon}</i>{label}</button>)}</nav>
           <details className="sidebar-section" open={["payroll","employeePayroll","payrollTax","wkr","rc"].includes(tab)}><summary>SALARIS & DGA</summary>{[["payroll","Salarissen"],["employeePayroll","Medewerkerloonstroken"],["payrollTax","Loonheffingen"],["wkr","Werkkostenregeling"],["rc","Rekening-courant DGA"]].map(([key,label]) => <button key={key} className={`sidebar-link ${tab === key ? "is-active" : ""}`} onClick={() => setTab(key as TabKey)}>{label}</button>)}</details>
           <nav className="sidebar-section">{[["checks",`Controles${checkCount ? ` (${checkCount})` : ""}`],["reports","Rapporten & downloads"],["settings","Instellingen"]].map(([key,label]) => <button className={`sidebar-link ${tab === key ? "is-active" : ""}`} key={key} onClick={() => setTab(key as TabKey)}>{label}</button>)}</nav>
           <div className="sidebar-footer"><span className="live-dot" style={{ background: syncState === "saved" ? "var(--teal)" : "#b45309" }} /><small aria-live="polite">{saveStatus}</small><button onClick={lockWorkspace}>Vergrendel</button></div>
@@ -4168,6 +4213,8 @@ export default function Home() {
           </>}
           {tab === "clients" && <ClientWorkspace clients={administrations} onOpen={openAdministration} onCreate={createClient} />}
           {tab === "documents" && <DocumentsPanel key={`${active.id}-${active.fiscalYear}`} administrationId={active.id} pin={workspacePin} year={active.fiscalYear} />}
+          {tab === "salesInvoices" && <SalesInvoicePanel key={`${active.id}-${active.fiscalYear}-${invoiceSession}`} admin={active} saved={syncState === "saved" && !issuePending} onSave={draft => setAdministrations(current => current.map(a => a.id === active.id ? { ...a, salesInvoiceDraft: draft } : a))} onContact={contact => setAdministrations(current => current.map(a => a.id === active.id ? { ...a, contacts: [...a.contacts, contact] } : a))} onIssue={issueSalesInvoice} onDownload={async invoice => { await downloadAdministrationDocument(workspacePin, active.id, invoice.documentId); }} />}
+
           {tab === "overview" && <div className="quick-action-grid"><button onClick={() => { cancelEditEntry(); setEntryForm({ ...emptyEntry, type: "expense", category: entryCategories.expense[0] }); setTab("entries"); }}><span>01 / INVOEREN</span><strong>Een boeking toevoegen ↗</strong><small>Inkomsten en uitgaven vastleggen</small></button><button onClick={() => setTab("documents")}><span>02 / BEWAREN</span><strong>Je documentdossier ↗</strong><small>Alle stukken bij de administratie</small></button><button onClick={() => setTab("filings")}><span>03 / CONTROLEREN</span><strong>Een aangifte voorbereiden ↗</strong><small>Een eigen werkruimte voor je aangifte</small></button></div>}
 
           {tab === "overview" && (
@@ -5554,6 +5601,7 @@ export default function Home() {
         </section>
       </div>
     </main>
+    {issuePending && <div className="invoice-issue-overlay" role="dialog" aria-modal="true" aria-label="Factuuruitgifte" aria-live="polite"><section className="panel"><h2>{issuingInvoice ? "Factuur vastleggen…" : "Serverbevestiging ontbreekt"}</h2><p>{issuingInvoice ? "Wacht op de serverbevestiging. Je factuur, PDF en boekingen worden samen opgeslagen." : "De factuur kan al zijn opgeslagen. Controleer hetzelfde verzoek; BoekBalans maakt daarbij geen dubbele factuur."}</p>{!issuingInvoice && <button autoFocus className="primary-button mt-4" onClick={() => { const attempt = invoiceIssueAttempt.current; if (attempt) void issueSalesInvoice(attempt.draft).catch(() => {}); }}>Uitgifte opnieuw controleren</button>}</section></div>}
     {quickContact && quickContact.administrationId === active.id && <QuickContactDialog key={`${quickContact.administrationId}-${quickContact.target}-${quickContact.draftId || "entry"}`} initialName={quickContact.initialName} role={quickContact.role} contacts={active.contacts} onSave={saveQuickContact} onSelect={selectQuickContact} onClose={() => setQuickContact(null)} />}
     </>
   );

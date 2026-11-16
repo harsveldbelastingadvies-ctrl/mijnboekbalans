@@ -29,6 +29,8 @@ export class WorkspaceSync<T, P> {
     this.options = options;
   }
   get dirty() { return this.blocked || this.uncertain || JSON.stringify(this.latest) !== this.confirmed; }
+  matchesConfirmed(value: T) { return !this.dirty && !this.saving && JSON.stringify(value) === this.confirmed; }
+  get revisionToken() { return this.revision; }
   private persist() {
     this.options.persist({ administrations: this.latest, revision: this.revision, savedAt: new Date().toISOString() });
   }
@@ -65,7 +67,7 @@ export class WorkspaceSync<T, P> {
     } catch (error) {
       // A lost response does not prove that the server rejected the write.
       this.uncertain = true;
-      this.blocked = error instanceof WorkspaceSaveError && ["REVISION_CONFLICT", "UPDATE_REQUIRED"].includes(error.code);
+      this.blocked = error instanceof WorkspaceSaveError && ["REVISION_CONFLICT", "UPDATE_REQUIRED", "ISSUED_INVOICE_LOCKED"].includes(error.code);
       this.options.state(this.blocked ? "conflict" : "error", error instanceof Error ? error.message : "Opslaan mislukt.");
     } finally { this.saving = false; }
   }
