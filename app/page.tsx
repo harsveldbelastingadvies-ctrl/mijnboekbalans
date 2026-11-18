@@ -23,6 +23,7 @@ import {
   useState,
 } from "react";
 
+import { buildTableReportPdf, appendReportFonts, reportTextWidth, reportPdfText, escapeReportPdfText, type PdfTableSection } from "./lib/table-pdf";
 import { buildModernPayslipPdf } from "./lib/payslip-pdf";
 
 import { getNextInvoiceNumber, hasDuplicateSalesInvoice, isValidInvoiceSequence } from "./lib/invoice-numbering";
@@ -1699,18 +1700,8 @@ function downloadBlob(filename: string, blob: Blob) {
   URL.revokeObjectURL(url);
 }
 
-function pdfSafe(value: string | number) {
-  return String(value)
-    .replaceAll("\u00a0", " ")
-    .replaceAll("€", "EUR")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\x20-\x7E]/g, "");
-}
-
-function escapePdfText(value: string | number) {
-  return pdfSafe(value).replace(/[\\()]/g, "\\$&");
-}
+function pdfSafe(value: string | number) { return reportPdfText(value); }
+function escapePdfText(value: string | number) { return escapeReportPdfText(value); }
 
 const pdfBrandColors = {
   ink: [0.06, 0.09, 0.13],
@@ -1766,6 +1757,11 @@ function buildPdfReport(
     commands.push(`${rgb(color)} rg BT /${font} ${size} Tf ${x} ${baseline} Td (${escapePdfText(value)}) Tj ET`);
   };
 
+  const rightText = (value: string, right: number, baseline: number, width: number, size = 8.5, font = "F1") => {
+    const fitted = Math.min(size, width / Math.max(1, reportTextWidth(value, 1, font === "F2")));
+    text(value, right - reportTextWidth(value, fitted, font === "F2"), baseline, fitted, colors.ink, font);
+  };
+
   const finishPage = () => {
     if (!commands.length) return;
     text(`BoekBalans · ${new Date().toLocaleDateString("nl-NL")} · pagina ${pageNumber}`, 42, 26, 8, colors.muted);
@@ -1800,7 +1796,7 @@ function buildPdfReport(
     rect(x, bottom, width, 58, colors.white, colors.line);
     rect(x, bottom + 54, width, 4, accent);
     text(label.toUpperCase(), x + 10, bottom + 38, 7.5, colors.muted, "F2");
-    text(value, x + 10, bottom + 17, 13, colors.ink, "F2");
+    rightText(value, x + width - 10, bottom + 17, width - 20, 13, "F2");
   };
 
   const addEntryHeader = () => {
@@ -1809,7 +1805,7 @@ function buildPdfReport(
     text("Datum", 150, y - 6, 8, colors.teal, "F2");
     text("Factuur", 205, y - 6, 8, colors.teal, "F2");
     text("Omschrijving", 260, y - 6, 8, colors.teal, "F2");
-    text("Bedrag", 420, y - 6, 8, colors.teal, "F2");
+    rightText("Bedrag", 490, y - 6, 70, 8, "F2");
     text("Status", 500, y - 6, 8, colors.teal, "F2");
     y -= 28;
   };
@@ -1853,7 +1849,7 @@ function buildPdfReport(
       text(entry.date, 150, y, 8.5);
       text(truncate(entry.invoiceNumber || "-", 11), 205, y, 8.5);
       text(truncate(entry.description, 24), 260, y, 8.5, colors.ink, "F2");
-      text(money.format(entry.amount), 420, y, 8.5);
+      rightText(money.format(entry.amount), 490, y, 70);
       text(
         entry.status === "paid" ? `Betaald${entry.paidDate ? ` ${entry.paidDate}` : ""}` : "Open",
         500,
@@ -1873,10 +1869,10 @@ function buildPdfReport(
   rect(42, y - 14, 511, 22, colors.tealSoft, colors.line);
   text("Kwartaal", 50, y - 6, 8, colors.teal, "F2");
   text("Boekingen", 120, y - 6, 8, colors.teal, "F2");
-  text("Omzet", 200, y - 6, 8, colors.teal, "F2");
-  text("Kosten", 285, y - 6, 8, colors.teal, "F2");
-  text("Resultaat", 370, y - 6, 8, colors.teal, "F2");
-  text("Btw saldo", 465, y - 6, 8, colors.teal, "F2");
+  rightText("Omzet", 272, y - 6, 72, 8, "F2");
+  rightText("Kosten", 357, y - 6, 72, 8, "F2");
+  rightText("Resultaat", 452, y - 6, 82, 8, "F2");
+  rightText("Btw saldo", 545, y - 6, 80, 8, "F2");
   y -= 30;
   quarterSummaries.forEach(({ quarter, entries: quarterEntries, summary: quarterSummary }) => {
     const quarterProfit = quarterSummary.revenue - quarterSummary.costs;
@@ -1884,10 +1880,10 @@ function buildPdfReport(
     ensureSpace(20);
     text(`Kwartaal ${quarter}`, 50, y, 8.5, colors.ink, "F2");
     text(quarterEntries.length, 120, y, 8.5);
-    text(money.format(quarterSummary.revenue), 200, y, 8.5);
-    text(money.format(quarterSummary.costs), 285, y, 8.5);
-    text(money.format(quarterProfit), 370, y, 8.5);
-    text(money.format(quarterVat), 465, y, 8.5);
+    rightText(money.format(quarterSummary.revenue), 272, y, 72);
+    rightText(money.format(quarterSummary.costs), 357, y, 72);
+    rightText(money.format(quarterProfit), 452, y, 82);
+    rightText(money.format(quarterVat), 545, y, 80);
     commands.push(`${rgb(colors.line)} RG 0.45 w 42 ${y - 8} m 553 ${y - 8} l S`);
     y -= 20;
   });
@@ -1897,9 +1893,10 @@ function buildPdfReport(
     "",
     "",
     "",
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>",
   ];
+  appendReportFonts(objects);
   const pageIds: number[] = [];
 
   pages.forEach((stream) => {
@@ -1931,168 +1928,9 @@ function buildPdfReport(
   return new Blob([pdf], { type: "application/pdf" });
 }
 
-type PdfTableSection = {
-  title: string;
-  headers: string[];
-  rows: Array<Array<string | number>>;
-  widths: number[];
-  emptyText?: string;
-};
-
-function buildTablePdf(
-  admin: Administration,
-  title: string,
-  periodLabel: string,
-  sections: PdfTableSection[],
-) {
+function buildTablePdf(admin: Administration, title: string, periodLabel: string, sections: PdfTableSection[], options: { landscape?: boolean } = {}) {
   if (/loonstrook|werkgeversoverzicht/i.test(title)) return buildModernPayslipPdf(admin, title, periodLabel, sections);
-  const compactPayslip = false;
-  const encoder = new TextEncoder();
-  const pages: string[] = [];
-  let commands: string[] = [];
-  let pageNumber = 0;
-  let y = 790;
-  const colors = pdfBrandColors;
-
-  const rgb = (color: number[]) => color.join(" ");
-  const wrap = (value: string | number, width: number) => {
-    const max = Math.max(8, Math.floor((width - 14) / 4.5));
-    const words = pdfSafe(value).split(/\s+/);
-    const lines: string[] = []; let line = "";
-    for (const word of words) {
-      if (line && (line + " " + word).length > max) { lines.push(line); line = ""; }
-      let rest = word;
-      while (rest.length > max) { if (line) { lines.push(line); line = ""; } lines.push(rest.slice(0,max)); rest = rest.slice(max); }
-      line = line ? line + " " + rest : rest;
-    }
-    if (line || !lines.length) lines.push(line);
-    return lines;
-  };
-  const rect = (x: number, bottom: number, width: number, height: number, fill: number[], stroke?: number[]) => {
-    commands.push(`${rgb(fill)} rg ${x} ${bottom} ${width} ${height} re f`);
-    if (stroke) commands.push(`${rgb(stroke)} RG 0.7 w ${x} ${bottom} ${width} ${height} re S`);
-  };
-  const text = (
-    value: string | number,
-    x: number,
-    baseline: number,
-    size = 9,
-    color = colors.ink,
-    font = "F1",
-  ) => {
-    commands.push(`${rgb(color)} rg BT /${font} ${size} Tf ${x} ${baseline} Td (${escapePdfText(value)}) Tj ET`);
-  };
-  const finishPage = () => {
-    if (!commands.length) return;
-    text(`BoekBalans · ${new Date().toLocaleDateString("nl-NL")} · pagina ${pageNumber}`, 42, 26, 8, colors.muted);
-    pages.push(commands.join("\n"));
-    commands = [];
-  };
-  const newPage = () => {
-    finishPage();
-    pageNumber += 1;
-    y = 790;
-    if (pageNumber === 1) {
-      rect(42, 724, 511, 86, colors.teal);
-      text("BoekBalans", 62, 785, 11, colors.white, "F2");
-      text(title, 62, 758, 22, colors.white, "F2");
-      text(`${admin.name} · ${periodLabel} · boekjaar ${admin.fiscalYear}`, 62, 739, 11, colors.white);
-      if (/loonstrook/i.test(title)) { y = 702; return; }
-      rect(42, 650, 511, 56, colors.tealSoft, colors.line);
-      text(`Ondernemer: ${admin.owner || "-"}`, 58, 686, 9, colors.ink, "F2");
-      text(`KvK: ${admin.kvk || "-"}    Btw-nummer: ${admin.vatNumber || "-"}`, 58, 670, 9, colors.ink);
-      text(`IBAN: ${admin.iban || "-"}`, 58, 654, 9, colors.ink);
-      y = 612;
-    } else {
-      text(title, 42, 806, 10, colors.teal, "F2");
-      text(`${admin.name} · ${periodLabel}`, 42, 791, 9, colors.muted);
-      y = 760;
-    }
-  };
-  const ensureSpace = (height: number) => {
-    if (y - height < 58) newPage();
-  };
-  const addSectionTitle = (sectionTitle: string) => {
-    ensureSpace(100);
-    text(sectionTitle, 42, y, 14, colors.ink, "F2");
-    y -= compactPayslip ? 15 : 18;
-    commands.push(`${rgb(colors.line)} RG 0.7 w 42 ${y} m 553 ${y} l S`);
-    y -= compactPayslip ? 12 : 16;
-  };
-  const addHeader = (section: PdfTableSection) => {
-    rect(42, y - 14, 511, 22, colors.tealSoft, colors.line);
-    let x = 50;
-    section.headers.forEach((header, index) => {
-      text(header, x, y - 6, 7.5, colors.teal, "F2");
-      x += section.widths[index];
-    });
-    y -= compactPayslip ? 22 : 28;
-  };
-
-  newPage();
-  sections.forEach((section) => {
-    addSectionTitle(section.title);
-    if (!section.rows.length) {
-      text(section.emptyText ?? "Geen gegevens in deze periode.", 42, y, 9, colors.muted);
-      y -= 26;
-      return;
-    }
-
-    addHeader(section);
-    section.rows.forEach((row) => {
-      const cells = row.map((cell,index) => wrap(cell,section.widths[index]));
-      const rowHeight = Math.max(...cells.map(lines=>lines.length)) * 11 + (compactPayslip ? 6 : 9);
-      ensureSpace(rowHeight + 22);
-      if (y > 750 || y < 74) addHeader(section);
-      let x = 50;
-      cells.forEach((lines, index) => {
-        const isAmount = index === row.length - 1;
-        lines.forEach((line,lineIndex)=>text(line,x,y-lineIndex*11,8.2,isAmount ? colors.ink : colors.muted,isAmount ? "F2" : "F1"));
-        x += section.widths[index];
-      });
-      commands.push(`${rgb(colors.line)} RG 0.45 w 42 ${y - rowHeight + 8} m 553 ${y - rowHeight + 8} l S`);
-      y -= rowHeight;
-    });
-    y -= 12;
-  });
-  finishPage();
-
-  const objects: string[] = [
-    "",
-    "",
-    "",
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>",
-  ];
-  const pageIds: number[] = [];
-
-  pages.forEach((stream) => {
-    const contentId = objects.length;
-    objects.push(`<< /Length ${encoder.encode(stream).length} >>\nstream\n${stream}\nendstream`);
-    const pageId = objects.length;
-    objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentId} 0 R >>`);
-    pageIds.push(pageId);
-  });
-
-  objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
-  objects[2] = `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pageIds.length} >>`;
-
-  let pdf = "%PDF-1.4\n";
-  const offsets = [0];
-  for (let index = 1; index < objects.length; index += 1) {
-    offsets[index] = encoder.encode(pdf).length;
-    pdf += `${index} 0 obj\n${objects[index]}\nendobj\n`;
-  }
-
-  const xrefStart = encoder.encode(pdf).length;
-  pdf += `xref\n0 ${objects.length}\n`;
-  pdf += "0000000000 65535 f \n";
-  for (let index = 1; index < objects.length; index += 1) {
-    pdf += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
-  }
-  pdf += `trailer\n<< /Size ${objects.length} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
-
-  return new Blob([pdf], { type: "application/pdf" });
+  return buildTableReportPdf(admin, title, periodLabel, sections, options);
 }
 
 function buildReportPdf(admin: Administration, summary: Summary, periodLabel: string) {
@@ -2191,110 +2029,78 @@ function buildProfitLossPdf(admin: Administration, statement: ProfitLossStatemen
 
 function buildVatOverviewPdf(admin: Administration, overview: VatOverview, periodLabel: string) {
   const international = overview.international;
-  return buildTablePdf(admin, "Btw-overzicht", periodLabel, [
+  const labels: Record<string, string> = { "1a": "Leveringen en diensten: hoog tarief", "1b": "Leveringen en diensten: laag tarief", "1e": "0%-omzet en binnenlandse verkoopverlegging", "2a": "Naar cliënt verlegde btw (binnenland)", "3a": "Uitvoer goederen buiten EU", "3b": "EU-goederen en -diensten", "3c": "Installatie- en afstandsverkopen" };
+  const sections: PdfTableSection[] = [
     {
-      title: "Verkoop en binnenlandse inkoopverlegging (ondersteunde rubrieken)",
-      headers: ["Rubriek", "Grondslag", "Nederlandse btw"], widths: [100, 200, 211],
-      rows: international.rubrics.map((row) => [row.code, money.format(row.basis), money.format(row.vat)]),
-    },
-    {
-      title: "ICP-specificatie: goederen factuurdatum / diensten leverdatum",
-      headers: ["Land", "Btw-id", "Goederen", "Diensten"], widths: [50, 181, 140, 140],
-      rows: [...international.icpRows.map((row) => [row.country, row.vatId, money.format(row.goods), money.format(row.services)]), ["Totaal", money.format(international.icpTotal), "Verschil met 3b", money.format(international.icpDifference)]],
-      emptyText: "Geen intracommunautaire prestaties in dit tijdvak.",
-    },
-    {
-      title: "Buitenlandse btw / OSS: apart te melden, niet in NL-btw-saldo",
-      headers: ["Land", "Route", "Omzet", "Buitenlandse btw"], widths: [50, 181, 140, 140],
-      rows: international.foreignRows.map((row) => [row.country, salesVatOptions.find(([key]) => key === row.route)?.[1] || row.route, money.format(row.basis), money.format(row.vat)]),
-      emptyText: "Geen buitenlandse btw geboekt.",
-    },
-    {
-      title: "Omzet buiten Nederlandse btw-aangifte (incl. OSS)",
-      headers: ["Factuur", "Land", "Behandeling", "Omzet"], widths: [130, 50, 211, 120],
-      rows: international.excluded.map((entry) => [entry.invoiceNumber || entry.relation || "Factuur", entry.salesVat?.country || "", salesVatOptions.find(([key]) => key === entry.salesVat?.treatment)?.[1] || "", money.format(entry.amount)]),
-      emptyText: "Geen afzonderlijk uitgesloten omzet.",
-    },
-    {
-      title: "Omzet met Nederlandse btw",
-      headers: ["Btw-tarief", "Grondslag", "Verschuldigde btw"],
-      widths: [125, 190, 196],
-      rows: [
-        ...overview.salesLines.map((line) => [
-          `${line.vatRate}%`,
-          money.format(line.basis),
-          money.format(line.vat),
-        ]),
-        ["Totaal", money.format(overview.salesBasisTotal), money.format(overview.salesVatTotal)],
-      ],
-      emptyText: "Nog geen omzet in deze periode.",
-    },
-    {
-      title: "Voorbelasting",
-      headers: ["Btw-tarief", "Grondslag kosten", "Betaalde btw", "Aftrekbare voorbelasting"],
-      widths: [80, 135, 135, 161],
-      rows: [
-        ...overview.inputVatLines.map((line) => [
-          `${line.vatRate}%`,
-          money.format(line.basis),
-          money.format(line.vat),
-          money.format(line.deductibleVat),
-        ]),
-        [
-          "Totaal",
-          money.format(overview.inputBasisTotal),
-          money.format(overview.inputVatTotal),
-          money.format(overview.deductibleInputVatTotal),
-        ],
-      ],
-      emptyText: "Nog geen kosten met voorbelasting in deze periode.",
-    },
-    {
-      title: "Inkoopfacturen uit eerdere kwartalen",
-      headers: ["Factuur", "Factuurdatum", "Btw-datum", "Voorbelasting"],
-      widths: [181, 100, 100, 130],
-      rows: overview.deferredEntries.map((entry) => [entry.invoiceNumber || entry.description, entry.date, getVatDate(entry), money.format(deductibleExpenseVat({ ...entry, salesVat: undefined }, Number(overview.vatDeductionPercent)))]),
-      emptyText: "Geen doorgeschoven inkoopfacturen in dit tijdvak.",
-    },
-    {
-      title: "Saldo btw",
-      headers: ["Onderdeel", "Bedrag"],
-      widths: [340, 171],
+      title: "Saldo btw", headers: ["Onderdeel", "Bedrag"], widths: [340, 171],
       rows: [
         ["Verschuldigde omzetbelasting", money.format(overview.vatDueTotal)],
         ["Aftrekbare voorbelasting", money.format(overview.deductibleInputVatTotal)],
-        ["Niet-aftrekbare voorbelasting", money.format(overview.nonDeductibleInputVatTotal)],
-        ["Aftrekpercentage voorbelasting", `${overview.vatDeductionPercent.toFixed(2)}%`],
-        [
-          overview.vatBalance >= 0 ? "Btw te betalen" : "Btw terug te vragen",
-          money.format(Math.abs(overview.vatBalance)),
-        ],
+        [overview.vatBalance >= 0 ? "Btw te betalen" : "Btw terug te vragen", money.format(Math.abs(overview.vatBalance))],
       ],
     },
-  ]);
+    {
+      title: "Nederlandse btw-aangifte: ondersteunde rubrieken",
+      headers: ["Rubriek", "Omschrijving", "Grondslag", "Btw"], widths: [48, 243, 110, 110],
+      rows: [
+        ...international.rubrics.map(row => [row.code, labels[row.code] || row.code, money.format(row.basis), money.format(row.vat)]),
+        ["5b", "Aftrekbare voorbelasting", "", money.format(overview.deductibleInputVatTotal)],
+      ],
+    },
+    {
+      title: "Voorbelasting per tarief (incl. binnenlandse verlegging)", headers: ["Tarief", "Grondslag kosten", "Btw op inkopen", "Aftrekbare btw"], widths: [61, 150, 150, 150],
+      rows: [
+        ...overview.inputVatLines.map(line => [`${line.vatRate}%`, money.format(line.basis), money.format(line.vat), money.format(line.deductibleVat)]),
+        ["Totaal", money.format(overview.inputBasisTotal), money.format(overview.inputVatTotal), money.format(overview.deductibleInputVatTotal)],
+      ],
+    },
+    {
+      title: "Toelichting voorbelasting", headers: ["Onderdeel", "Waarde"], widths: [340, 171],
+      rows: [
+        ["Niet-aftrekbare btw (in kosten verwerkt)", money.format(overview.nonDeductibleInputVatTotal)],
+        ["Aftrekpercentage voorbelasting", `${overview.vatDeductionPercent.toFixed(2).replace(".", ",")}%`],
+      ],
+    },
+  ];
+  if (overview.deferredEntries.length) sections.push({
+    title: "Inkoopfacturen uit eerdere kwartalen", headers: ["Factuur", "Factuurdatum", "Btw-datum", "Voorbelasting"], widths: [181, 100, 100, 130],
+    rows: overview.deferredEntries.map(entry => [entry.invoiceNumber || entry.description, formatDutchDate(entry.date), formatDutchDate(getVatDate(entry)), money.format(deductibleExpenseVat({ ...entry, salesVat: undefined }, Number(overview.vatDeductionPercent)))]),
+  });
+  if (international.icpRows.length || international.icpDifference !== 0) {
+    sections.push({
+      title: "ICP-specificatie", headers: ["Land", "Btw-id", "Goederen", "Diensten"], widths: [50, 181, 140, 140],
+      rows: international.icpRows.map(row => [row.country, row.vatId, money.format(row.goods), money.format(row.services)]),
+    }, {
+      title: "ICP-aansluiting", headers: ["Onderdeel", "Bedrag"], widths: [340, 171],
+      rows: [["Totaal ICP", money.format(international.icpTotal)], ["Verschil met rubriek 3b", money.format(international.icpDifference)], ["Toerekening", "Goederen op factuurdatum; diensten op leverdatum."]],
+    });
+  }
+  if (international.foreignRows.length) sections.push({
+    title: "Buitenlandse btw en OSS (buiten NL-btw-saldo)", headers: ["Land", "Route", "Omzet", "Buitenlandse btw"], widths: [50, 181, 140, 140],
+    rows: international.foreignRows.map(row => [row.country, salesVatOptions.find(([key]) => key === row.route)?.[1] || row.route, money.format(row.basis), money.format(row.vat)]),
+  });
+  if (international.excluded.length) sections.push({
+    title: "Omzet buiten Nederlandse btw-aangifte (incl. OSS)", headers: ["Factuur", "Land", "Behandeling", "Omzet"], widths: [130, 50, 211, 120],
+    rows: international.excluded.map(entry => [entry.invoiceNumber || entry.relation || "Factuur", entry.salesVat?.country || "", salesVatOptions.find(([key]) => key === entry.salesVat?.treatment)?.[1] || "", money.format(entry.amount)]),
+  });
+  return buildTablePdf(admin, "Btw-overzicht", periodLabel, sections);
 }
 
 function buildEntriesPdf(admin: Administration, entries: Entry[], periodLabel: string) {
-  return buildTablePdf(admin, "Boekingen", periodLabel, [
-    {
-      title: "Boekingen",
-      headers: ["Relatie", "Datum", "Factuur", "Omschrijving", "Excl.", "Btw", "Status", "Soort", "Categorie", "Verwerking"],
-      widths: [58, 38, 42, 68, 43, 26, 36, 38, 50, 112],
-      rows: entries.map((entry) => [
-        entry.relation,
-        entry.date,
-        entry.invoiceNumber || "-",
-        entry.description,
-        money.format(entry.amount),
-        `${entry.vatRate}%${entry.purchaseVat === "nl_reverse" ? " verlegd" : ""}`,
-        entry.status === "paid" ? `Betaald ${entry.paidDate || ""}` : "Open",
-        entry.type === "income" ? "Inkomsten" : "Uitgaven",
-        entry.category,
-        formatEntryProcessing(entry),
-      ]),
-      emptyText: "Geen boekingen in deze periode.",
-    },
-  ]);
+  return buildTablePdf(admin, "Boekingen", periodLabel, [{
+    title: `${entries.length} boekingen`,
+    headers: ["Datum", "Factuur", "Relatie", "Omschrijving en verwerking", "Soort / categorie", "Status", "Excl. btw", "Factuur-btw"],
+    widths: [64, 75, 110, 170, 95, 70, 88, 86],
+    alignments: ["left", "left", "left", "left", "left", "left", "right", "right"],
+    rows: entries.map(entry => [
+      formatDutchDate(entry.date), entry.invoiceNumber || "-", entry.relation,
+      [entry.description, `Btw-tarief: ${entry.vatRate}%`, formatEntryProcessing(entry)].filter(Boolean).join("\n"),
+      `${entry.type === "income" ? "Inkomsten" : "Uitgaven"}\n${entry.category}`,
+      entry.status === "paid" ? `Betaald${entry.paidDate ? `\n${formatDutchDate(entry.paidDate)}` : ""}` : "Open",
+      money.format(entry.amount), money.format(invoicedVat(entry)),
+    ]),
+    emptyText: "Geen boekingen in deze periode.",
+  }], { landscape: true });
 }
 
 function buildContactsPdf(admin: Administration) {
